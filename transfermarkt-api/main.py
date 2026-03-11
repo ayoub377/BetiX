@@ -1,9 +1,9 @@
 import json
 import logging
 import os
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-import boto3, tempfile
 import uvicorn
 from fastapi import FastAPI, Depends, HTTPException
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -97,12 +97,19 @@ def setup_firebase_credentials():
         print("DEBUG: GOOGLE_APPLICATION_CREDENTIALS already set, skipping")
         return
 
-    print("DEBUG: Fetching from Secrets Manager...")
+    print("DEBUG: Fetching from GCP Secret Manager...")
     try:
-        client = boto3.client('secretsmanager', region_name='eu-west-3')
-        secret = client.get_secret_value(SecretId='firebase-credentials')
+        from google.cloud import secretmanager
+
+        project_id = os.environ.get("GCP_PROJECT_ID")
+        if not project_id:
+            raise RuntimeError("GCP_PROJECT_ID env var is required when GOOGLE_APPLICATION_CREDENTIALS is not set.")
+
+        client = secretmanager.SecretManagerServiceClient()
+        secret_name = f"projects/{project_id}/secrets/firebase-credentials/versions/latest"
+        response = client.access_secret_version(request={"name": secret_name})
         print("DEBUG: Secret fetched successfully")
-        creds = json.loads(secret['SecretString'])
+        creds = json.loads(response.payload.data.decode("UTF-8"))
         tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
         json.dump(creds, tmp)
         tmp.close()
