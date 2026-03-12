@@ -1,0 +1,45 @@
+# docker-compose.gce.yml
+# Run on a GCE VM to provide Redis + PostgreSQL for Cloud Run.
+# Cloud Run connects via VPC connector to the VM's internal IP.
+#
+# Usage:
+#   ssh into GCE VM, then:
+#   docker compose -f docker-compose.gce.yml up -d
+
+services:
+  redis:
+    image: "redis:7-alpine"
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  postgres:
+    image: "postgres:16-alpine"
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-betting_analysis}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:
+  postgres-data:
