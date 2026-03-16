@@ -54,7 +54,8 @@ WORKDIR /app
 COPY --chown=appuser:appuser . .
 
 # Create writable directories for the non-root user
-RUN mkdir -p /app/trained_models && chown appuser:appuser /app/trained_models
+RUN mkdir -p /app/trained_models /tmp/chrome-profile /tmp/chrome-crashes \
+    && chown -R appuser:appuser /app/trained_models /tmp/chrome-profile /tmp/chrome-crashes
 
 # Switch to non-root user
 USER appuser
