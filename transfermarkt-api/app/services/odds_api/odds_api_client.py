@@ -50,12 +50,55 @@ _DEFAULT_KEYS_BY_SPORT = {
     "football": SOCCER_SPORT_KEYS,
 }
 
+# User-friendly aliases → Odds API sport keys
+SPORT_KEY_ALIASES = {
+    # Football
+    "premier_league": "soccer_epl",
+    "epl": "soccer_epl",
+    "la_liga": "soccer_spain_la_liga",
+    "bundesliga": "soccer_germany_bundesliga",
+    "serie_a": "soccer_italy_serie_a",
+    "ligue_1": "soccer_france_ligue_one",
+    "champions_league": "soccer_uefa_champs_league",
+    "europa_league": "soccer_uefa_europa_league",
+    "eredivisie": "soccer_netherlands_eredivisie",
+    "primeira_liga": "soccer_portugal_primeira_liga",
+    "super_lig": "soccer_turkey_super_league",
+    # Tennis
+    "tennis_atp": "tennis_atp",
+    "tennis_wta": "tennis_wta",
+    "atp": "tennis_atp",
+    "wta": "tennis_wta",
+    "atp_doubles": "tennis_atp_doubles",
+    "wta_doubles": "tennis_wta_doubles",
+    "itf_men": "tennis_itf_men",
+    "itf_women": "tennis_itf_women",
+}
+
+
+def resolve_sport_key(sport_key: Optional[str]) -> Optional[str]:
+    """Resolve a user-friendly alias to the Odds API sport key.
+
+    Accepts: 'champions_league', 'la_liga', 'atp', 'soccer_epl', etc.
+    Returns the real Odds API key or None if unrecognized.
+    """
+    if not sport_key:
+        return None
+    key = sport_key.strip().lower()
+    # Check alias first
+    if key in SPORT_KEY_ALIASES:
+        return SPORT_KEY_ALIASES[key]
+    # Already a valid Odds API key
+    if _SPORT_KEY_RE.match(key):
+        return key
+    return None
+
 
 def _is_valid_sport_key(sport_key: Optional[str]) -> bool:
-    """Return True only if sport_key looks like a real Odds API key (e.g. 'soccer_epl')."""
+    """Return True if sport_key is a valid Odds API key or a known alias."""
     if not sport_key:
         return False
-    return bool(_SPORT_KEY_RE.match(sport_key.strip()))
+    return resolve_sport_key(sport_key) is not None
 
 
 def _normalize(name: str) -> str:
@@ -63,11 +106,15 @@ def _normalize(name: str) -> str:
     return name.strip().lower()
 
 
+def _name_matches(a: str, b: str) -> bool:
+    """Check if two names refer to the same entity (case-insensitive, substring)."""
+    na, nb = _normalize(a), _normalize(b)
+    return na in nb or nb in na
+
+
 def _teams_match(api_home: str, api_away: str, home: str, away: str) -> bool:
     """Check if Odds API team names match the target (case-insensitive, substring)."""
-    ah, aa = _normalize(api_home), _normalize(api_away)
-    h, a = _normalize(home), _normalize(away)
-    return (h in ah or ah in h) and (a in aa or aa in a)
+    return _name_matches(api_home, home) and _name_matches(api_away, away)
 
 
 def find_event(
@@ -82,11 +129,13 @@ def find_event(
 
     Returns (event_id, sport_key) or None if no match found.
 
-    - If sport_key is a valid Odds API key (e.g. "soccer_epl"), search only that.
-    - Otherwise search TENNIS_SPORT_KEYS for tennis, SOCCER_SPORT_KEYS for football.
+    - sport_key accepts aliases ('champions_league', 'la_liga', 'atp') or
+      raw Odds API keys ('soccer_epl'). See SPORT_KEY_ALIASES.
+    - If sport_key is not provided, searches all keys for the given sport.
     """
-    if _is_valid_sport_key(sport_key):
-        keys_to_search = [sport_key]
+    resolved = resolve_sport_key(sport_key)
+    if resolved:
+        keys_to_search = [resolved]
     else:
         # Ignore invalid/placeholder values like "string" — use sport defaults
         if sport_key and not _is_valid_sport_key(sport_key):
@@ -105,6 +154,7 @@ def find_event(
             if not isinstance(events, list):
                 continue
 
+            # Pass 1: both teams match (strong match)
             for event in events:
                 api_home = event.get("home_team", "")
                 api_away = event.get("away_team", "")
@@ -115,6 +165,27 @@ def find_event(
                         home_team, away_team, event_id, sk,
                     )
                     return event_id, sk
+
+            # Pass 2: single-team match — if exactly one event matches
+            # either team name, use it (handles abbreviations like PSG)
+            single_matches = []
+            for event in events:
+                api_home = event.get("home_team", "")
+                api_away = event.get("away_team", "")
+                either_home = _name_matches(api_home, home_team) or _name_matches(api_away, home_team)
+                either_away = _name_matches(api_home, away_team) or _name_matches(api_away, away_team)
+                if either_home or either_away:
+                    single_matches.append(event)
+
+            if len(single_matches) == 1:
+                event = single_matches[0]
+                event_id = event["id"]
+                logger.info(
+                    "Single-team matched '%s vs %s' → event %s (%s vs %s) in %s",
+                    home_team, away_team, event_id,
+                    event.get("home_team"), event.get("away_team"), sk,
+                )
+                return event_id, sk
 
         except Exception as e:
             logger.warning("Error searching events in %s: %s", sk, e)
@@ -144,6 +215,9 @@ def extract_sharp_odds_from_event(
     result = {}
     h_norm = _normalize(home_team)
     a_norm = _normalize(away_team)
+    # Odds API home/away from the event data itself (authoritative names)
+    api_home_norm = _normalize(event_data.get("home_team", ""))
+    api_away_norm = _normalize(event_data.get("away_team", ""))
 
     for bm in event_data.get("bookmakers", []):
         bm_key = bm.get("key", "")
@@ -163,9 +237,14 @@ def extract_sharp_odds_from_event(
 
                 if name == "draw":
                     odds_map["draw"] = price
-                elif name in h_norm or h_norm in name:
+                elif _name_matches(name, h_norm):
                     odds_map["home"] = price
-                elif name in a_norm or a_norm in name:
+                elif _name_matches(name, a_norm):
+                    odds_map["away"] = price
+                # Fallback: match against the Odds API's own team names
+                elif _name_matches(name, api_home_norm):
+                    odds_map["home"] = price
+                elif _name_matches(name, api_away_norm):
                     odds_map["away"] = price
 
             if "home" in odds_map and "away" in odds_map:

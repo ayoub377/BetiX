@@ -77,11 +77,10 @@ class TrackRequest(BaseModel):
     @field_validator("sport_key", mode="before")
     @classmethod
     def sanitize_sport_key(cls, v):
-        """Ignore Swagger placeholder values — sport_key must look like 'soccer_epl'."""
-        from app.services.odds_api.odds_api_client import _is_valid_sport_key
-        if not _is_valid_sport_key(v):
-            return None
-        return str(v).strip()
+        """Resolve aliases ('champions_league' → 'soccer_uefa_champs_league')
+        and reject invalid/placeholder values like 'string'."""
+        from app.services.odds_api.odds_api_client import resolve_sport_key
+        return resolve_sport_key(v)
 
     def validate_inputs(self):
         """Raises ValueError with a clear message if inputs are unusable."""
