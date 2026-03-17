@@ -9,9 +9,11 @@ from app.services.odds_api.odds_api_client import (
     find_event,
     fetch_sharp_odds,
     extract_sharp_odds_from_event,
+    resolve_sport_key,
     SHARP_BOOKMAKERS,
     SOCCER_SPORT_KEYS,
     TENNIS_SPORT_KEYS,
+    SPORT_KEY_ALIASES,
 )
 
 
@@ -115,6 +117,56 @@ class TestConstants:
 
     def test_tennis_sport_keys_includes_wta(self):
         assert "tennis_wta" in TENNIS_SPORT_KEYS
+
+
+# ── Sport key aliases ─────────────────────────────────────────────
+
+class TestSportKeyAliases:
+    def test_champions_league_resolves(self):
+        assert resolve_sport_key("champions_league") == "soccer_uefa_champs_league"
+
+    def test_la_liga_resolves(self):
+        assert resolve_sport_key("la_liga") == "soccer_spain_la_liga"
+
+    def test_epl_resolves(self):
+        assert resolve_sport_key("epl") == "soccer_epl"
+
+    def test_premier_league_resolves(self):
+        assert resolve_sport_key("premier_league") == "soccer_epl"
+
+    def test_atp_resolves(self):
+        assert resolve_sport_key("atp") == "tennis_atp"
+
+    def test_wta_resolves(self):
+        assert resolve_sport_key("wta") == "tennis_wta"
+
+    def test_raw_odds_api_key_passes_through(self):
+        assert resolve_sport_key("soccer_epl") == "soccer_epl"
+
+    def test_invalid_key_returns_none(self):
+        assert resolve_sport_key("string") is None
+
+    def test_none_returns_none(self):
+        assert resolve_sport_key(None) is None
+
+    def test_case_insensitive(self):
+        assert resolve_sport_key("Champions_League") == "soccer_uefa_champs_league"
+
+    @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_find_event_accepts_alias(self, mock_httpx):
+        """find_event should resolve 'champions_league' to the real key."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = SAMPLE_EVENTS_RESPONSE
+        mock_httpx.get.return_value = mock_response
+
+        result = find_event(
+            "fake_key", "Arsenal", "Chelsea",
+            sport_key="champions_league",
+        )
+        # Verify it searched the correct resolved key
+        call_url = mock_httpx.get.call_args[0][0]
+        assert "soccer_uefa_champs_league" in call_url
 
 
 # ── extract_sharp_odds_from_event ─────────────────────────────────
@@ -429,6 +481,87 @@ class TestTennisFindEvent:
         assert result is None  # no match, but didn't crash
 
 
+class TestSingleTeamMatch:
+    """When one team uses an abbreviation (e.g. PSG), single-team matching kicks in."""
+
+    @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_matches_when_one_team_is_abbreviated(self, mock_httpx):
+        """Chelsea vs PSG: 'Chelsea' matches but 'PSG' doesn't match
+        'Paris Saint Germain'. Single-team fallback should find the event."""
+        events = [
+            {
+                "id": "ucl_event_001",
+                "sport_key": "soccer_uefa_champs_league",
+                "home_team": "Chelsea",
+                "away_team": "Paris Saint Germain",
+                "commence_time": "2026-03-17T19:00:00Z",
+            },
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = events
+        mock_httpx.get.return_value = mock_response
+
+        result = find_event(
+            "fake_key", "Chelsea", "PSG",
+            sport_key="soccer_uefa_champs_league",
+        )
+        assert result is not None
+        assert result[0] == "ucl_event_001"
+
+    @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_no_match_when_multiple_events_match_one_team(self, mock_httpx):
+        """If two events both have 'Chelsea', single-team match is ambiguous — skip."""
+        events = [
+            {
+                "id": "event_1",
+                "sport_key": "soccer_epl",
+                "home_team": "Chelsea",
+                "away_team": "Paris Saint Germain",
+            },
+            {
+                "id": "event_2",
+                "sport_key": "soccer_epl",
+                "home_team": "Chelsea",
+                "away_team": "Barcelona",
+            },
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = events
+        mock_httpx.get.return_value = mock_response
+
+        result = find_event(
+            "fake_key", "Chelsea", "PSG",
+            sport_key="soccer_epl",
+        )
+        # Ambiguous — two Chelsea events, should not match
+        assert result is None
+
+    @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_still_prefers_exact_match_over_single(self, mock_httpx):
+        """Both-team match should take priority over single-team."""
+        events = [
+            {
+                "id": "exact_match",
+                "sport_key": "soccer_epl",
+                "home_team": "Manchester United",
+                "away_team": "Liverpool",
+            },
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = events
+        mock_httpx.get.return_value = mock_response
+
+        result = find_event(
+            "fake_key", "Manchester United", "Liverpool",
+            sport_key="soccer_epl",
+        )
+        assert result is not None
+        assert result[0] == "exact_match"
+
+
 class TestTennisExtractSharpOdds:
     def test_extracts_tennis_odds_no_draw(self):
         """Tennis events have no draw — home/away only."""
@@ -453,3 +586,63 @@ class TestTennisExtractSharpOdds:
         betfair = result["betfair_ex_eu"]
         assert betfair["home"] == pytest.approx(2.60)
         assert betfair["away"] == pytest.approx(1.50)
+
+
+class TestExtractWithMismatchedNames:
+    """When FlashScore names differ from Odds API names, fall back to API's own team names."""
+
+    def test_extracts_using_api_team_names_when_flashscore_doesnt_match(self):
+        """FlashScore says 'PSG' but outcome says 'Paris Saint Germain'."""
+        event = {
+            "id": "ucl_001",
+            "home_team": "Chelsea",
+            "away_team": "Paris Saint Germain",
+            "bookmakers": [
+                {
+                    "key": "pinnacle",
+                    "title": "Pinnacle",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "Chelsea", "price": 2.15},
+                                {"name": "Paris Saint Germain", "price": 2.80},
+                                {"name": "Draw", "price": 3.50},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        result = extract_sharp_odds_from_event(event, "Chelsea", "PSG")
+        assert "pinnacle" in result
+        assert result["pinnacle"]["home"] == pytest.approx(2.15)
+        assert result["pinnacle"]["away"] == pytest.approx(2.80)
+        assert result["pinnacle"]["draw"] == pytest.approx(3.50)
+
+    def test_extracts_tennis_with_different_name_format(self):
+        """FlashScore: 'Eala A.' vs Odds API outcome: 'Alex Eala'."""
+        event = {
+            "id": "tennis_001",
+            "home_team": "Alex Eala",
+            "away_team": "Linda Noskova",
+            "bookmakers": [
+                {
+                    "key": "pinnacle",
+                    "title": "Pinnacle",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "Alex Eala", "price": 2.55},
+                                {"name": "Linda Noskova", "price": 1.55},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        result = extract_sharp_odds_from_event(event, "Eala A.", "Noskova L.")
+        assert "pinnacle" in result
+        assert result["pinnacle"]["home"] == pytest.approx(2.55)
+        assert result["pinnacle"]["away"] == pytest.approx(1.55)
