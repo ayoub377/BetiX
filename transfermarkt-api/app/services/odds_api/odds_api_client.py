@@ -5,6 +5,7 @@ Only used when ODDS_API_KEY env var is set. Completely optional;
 the odds tracker works with FlashScore alone if no key is configured.
 """
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -15,6 +16,9 @@ BASE_URL = "https://api.the-odds-api.com/v4"
 
 # Sharp bookmakers whose odds we want to capture alongside FlashScore
 SHARP_BOOKMAKERS = ["pinnacle", "betfair_ex_eu", "betonlineag"]
+
+# Regex for valid Odds API sport keys: e.g. "soccer_epl", "tennis_atp"
+_SPORT_KEY_RE = re.compile(r'^[a-z][a-z0-9]+(_[a-z][a-z0-9]+)+$')
 
 # Major soccer leagues to search when sport_key is not provided
 SOCCER_SPORT_KEYS = [
@@ -29,6 +33,29 @@ SOCCER_SPORT_KEYS = [
     "soccer_portugal_primeira_liga",
     "soccer_turkey_super_league",
 ]
+
+# Tennis tours to search when no sport_key is provided for a tennis match
+TENNIS_SPORT_KEYS = [
+    "tennis_wta",
+    "tennis_atp",
+    "tennis_wta_doubles",
+    "tennis_atp_doubles",
+    "tennis_itf_women",
+    "tennis_itf_men",
+]
+
+# Map sport name → default keys list
+_DEFAULT_KEYS_BY_SPORT = {
+    "tennis": TENNIS_SPORT_KEYS,
+    "football": SOCCER_SPORT_KEYS,
+}
+
+
+def _is_valid_sport_key(sport_key: Optional[str]) -> bool:
+    """Return True only if sport_key looks like a real Odds API key (e.g. 'soccer_epl')."""
+    if not sport_key:
+        return False
+    return bool(_SPORT_KEY_RE.match(sport_key.strip()))
 
 
 def _normalize(name: str) -> str:
@@ -48,14 +75,23 @@ def find_event(
     home_team: str,
     away_team: str,
     sport_key: Optional[str] = None,
+    sport: str = "football",
 ) -> Optional[tuple[str, str]]:
     """
-    Search The Odds API events for a match matching the given team names.
+    Search The Odds API events for a match matching the given team/player names.
 
     Returns (event_id, sport_key) or None if no match found.
-    When sport_key is None, searches across SOCCER_SPORT_KEYS.
+
+    - If sport_key is a valid Odds API key (e.g. "soccer_epl"), search only that.
+    - Otherwise search TENNIS_SPORT_KEYS for tennis, SOCCER_SPORT_KEYS for football.
     """
-    keys_to_search = [sport_key] if sport_key else SOCCER_SPORT_KEYS
+    if _is_valid_sport_key(sport_key):
+        keys_to_search = [sport_key]
+    else:
+        # Ignore invalid/placeholder values like "string" — use sport defaults
+        if sport_key and not _is_valid_sport_key(sport_key):
+            logger.info("Ignoring invalid sport_key '%s', using sport=%s defaults.", sport_key, sport)
+        keys_to_search = _DEFAULT_KEYS_BY_SPORT.get(sport, SOCCER_SPORT_KEYS)
 
     for sk in keys_to_search:
         try:
@@ -97,10 +133,12 @@ def extract_sharp_odds_from_event(
     Given raw event data (with bookmakers), extract H2H odds
     from sharp bookmakers only.
 
+    Works for both football (home/draw/away) and tennis (home/away, no draw).
+
     Returns e.g.:
         {
-            "pinnacle": {"home": 2.50, "draw": 3.20, "away": 2.80},
-            "betfair_ex_eu": {"home": 2.55, "draw": 3.15, "away": 2.85},
+            "pinnacle": {"home": 2.50, "draw": 3.20, "away": 2.80},   # football
+            "pinnacle": {"home": 2.55, "away": 1.55},                  # tennis
         }
     """
     result = {}

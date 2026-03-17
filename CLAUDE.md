@@ -13,7 +13,7 @@ A SaaS betting analysis platform with two main components:
 
 ### Backend (`transfermarkt-api/`)
 
-**Entry point:** `main.py` — initializes FastAPI, Firebase Admin SDK (credentials fetched from AWS Secrets Manager in production or via `GOOGLE_APPLICATION_CREDENTIALS` env var locally), APScheduler, and Redis-based odds tracking recovery on startup.
+**Entry point:** `main.py` — initializes FastAPI, Firebase Admin SDK (credentials fetched from GCP Secret Manager in production or via `GOOGLE_APPLICATION_CREDENTIALS` env var locally), APScheduler, and Redis-based odds tracking recovery on startup.
 
 **API routing:** `app/api/api.py` registers all routers under `/api`:
 - `/competitions`, `/clubs`, `/players` — Transfermarkt scraping endpoints
@@ -42,8 +42,9 @@ Next.js app with pages in `src/app/`: `dashboard`, `arbitrage`, `pro-analysis`, 
 ### Infrastructure
 
 - **Local dev:** `docker-compose.yml` — fastapi (port 9000), redis (6379), frontend (port 80)
-- **Production:** AWS ECS (eu-west-3) via `docker-compose-ecs.yml`; CI/CD in `.github/workflows/deploy.yml` deploys on push to `master` when `transfermarkt-api/**` changes (ECR → ECS)
-- Firebase credentials stored in AWS Secrets Manager as `firebase-credentials` secret
+- **Production:** GCP Cloud Run (europe-west9) for FastAPI; GCE VM with `docker-compose.gce.yml` for Redis + PostgreSQL. CI/CD in `.github/workflows/deploy.yml` deploys on push to `master` when `transfermarkt-api/**` changes (Artifact Registry → Cloud Run)
+- Firebase credentials stored in GCP Secret Manager as `firebase-credentials` secret
+- Cloud Build config in `cloudbuild.yaml` (alternative to GitHub Actions pipeline)
 
 ## Running Locally
 
@@ -99,13 +100,15 @@ Set in `transfermarkt-api/.env`:
 | Variable | Description |
 |---|---|
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to Firebase service account JSON (local dev) |
-| `REDIS_HOST` | Redis host (default: `localhost`, set to `redis` in Docker) |
+| `REDIS_HOST` | Redis host (default: `localhost`, set to GCE VM internal IP in production) |
+| `DATABASE_URL` | PostgreSQL connection string (default: `postgresql://postgres:postgres@localhost:5432/betting_analysis`) |
+| `GCP_PROJECT_ID` | GCP project ID (production only — used to fetch secrets from Secret Manager) |
 | `RATE_LIMITING_ENABLE` | Enable rate limiting (`true`/`false`, default `false`) |
 | `RATE_LIMITING_FREQUENCY` | slowapi rate limit string (default `2/3seconds`) |
 | `DEFAULT_MAX_REQUESTS` | Per-user request quota per period (default `50`) |
 | `DEFAULT_RESET_DURATION` | Quota reset period in seconds (default `86400`) |
 
-AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) are needed in production for Secrets Manager access and are stored as GitHub Actions secrets.
+GCP credentials for CI/CD are configured via Workload Identity Federation. GitHub Actions secrets needed: `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT`.
 
 ## Git Branching Strategy
 

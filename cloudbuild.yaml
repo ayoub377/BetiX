@@ -1,0 +1,60 @@
+steps:
+  # 1. Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'europe-west9-docker.pkg.dev/$PROJECT_ID/betting-api/fastapi-app:$COMMIT_SHA'
+      - '-t'
+      - 'europe-west9-docker.pkg.dev/$PROJECT_ID/betting-api/fastapi-app:latest'
+      - './transfermarkt-api'
+
+  # 2. Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'europe-west9-docker.pkg.dev/$PROJECT_ID/betting-api/fastapi-app'
+
+  # 3. Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'fastapi-app'
+      - '--image'
+      - 'europe-west9-docker.pkg.dev/$PROJECT_ID/betting-api/fastapi-app:$COMMIT_SHA'
+      - '--region'
+      - 'europe-west9'
+      - '--platform'
+      - 'managed'
+      - '--port'
+      - '9000'
+      - '--memory'
+      - '1Gi'
+      - '--cpu'
+      - '1'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '3'
+      - '--set-secrets'
+      - 'GCP_PROJECT_ID=projects/$PROJECT_ID/secrets/gcp-project-id:latest'
+      - '--set-env-vars'
+      - 'REDIS_HOST=${_REDIS_HOST},DATABASE_URL=${_DATABASE_URL}'
+      - '--vpc-connector'
+      - '${_VPC_CONNECTOR}'
+      - '--allow-unauthenticated'
+
+images:
+  - 'europe-west9-docker.pkg.dev/$PROJECT_ID/betting-api/fastapi-app:$COMMIT_SHA'
+  - 'europe-west9-docker.pkg.dev/$PROJECT_ID/betting-api/fastapi-app:latest'
+
+substitutions:
+  _REDIS_HOST: '10.0.0.2'       # GCE VM internal IP — update after VM creation
+  _DATABASE_URL: 'postgresql://postgres:postgres@10.0.0.2:5432/betting_analysis'
+  _VPC_CONNECTOR: 'projects/${PROJECT_ID}/locations/europe-west9/connectors/betting-vpc-connector'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

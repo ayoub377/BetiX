@@ -11,6 +11,7 @@ from app.services.odds_api.odds_api_client import (
     extract_sharp_odds_from_event,
     SHARP_BOOKMAKERS,
     SOCCER_SPORT_KEYS,
+    TENNIS_SPORT_KEYS,
 )
 
 
@@ -105,6 +106,15 @@ class TestConstants:
 
     def test_soccer_sport_keys_includes_epl(self):
         assert "soccer_epl" in SOCCER_SPORT_KEYS
+
+    def test_tennis_sport_keys_not_empty(self):
+        assert len(TENNIS_SPORT_KEYS) > 0
+
+    def test_tennis_sport_keys_includes_atp(self):
+        assert "tennis_atp" in TENNIS_SPORT_KEYS
+
+    def test_tennis_sport_keys_includes_wta(self):
+        assert "tennis_wta" in TENNIS_SPORT_KEYS
 
 
 # ── extract_sharp_odds_from_event ─────────────────────────────────
@@ -299,3 +309,147 @@ class TestFetchSharpOdds:
             "Team A", "Team B",
         )
         assert result == {}
+
+
+# ── Tennis support ────────────────────────────────────────────────
+
+SAMPLE_TENNIS_EVENTS = [
+    {
+        "id": "tennis_event_001",
+        "sport_key": "tennis_wta",
+        "home_team": "Eala A.",
+        "away_team": "Noskova L.",
+        "commence_time": "2026-03-11T02:00:00Z",
+        "bookmakers": [],
+    },
+]
+
+SAMPLE_TENNIS_ODDS_RESPONSE = {
+    "id": "tennis_event_001",
+    "sport_key": "tennis_wta",
+    "home_team": "Eala A.",
+    "away_team": "Noskova L.",
+    "commence_time": "2026-03-11T02:00:00Z",
+    "bookmakers": [
+        {
+            "key": "pinnacle",
+            "title": "Pinnacle",
+            "markets": [
+                {
+                    "key": "h2h",
+                    "outcomes": [
+                        {"name": "Eala A.", "price": 2.55},
+                        {"name": "Noskova L.", "price": 1.55},
+                    ],
+                }
+            ],
+        },
+        {
+            "key": "betfair_ex_eu",
+            "title": "Betfair Exchange",
+            "markets": [
+                {
+                    "key": "h2h",
+                    "outcomes": [
+                        {"name": "Eala A.", "price": 2.60},
+                        {"name": "Noskova L.", "price": 1.50},
+                    ],
+                }
+            ],
+        },
+    ],
+}
+
+
+class TestTennisFindEvent:
+    @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_finds_tennis_event_by_sport(self, mock_httpx):
+        """When sport='tennis', should search TENNIS_SPORT_KEYS."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = SAMPLE_TENNIS_EVENTS
+        mock_httpx.get.return_value = mock_response
+
+        result = find_event("fake_key", "Eala A.", "Noskova L.", sport="tennis")
+        assert result is not None
+        event_id, sport_key = result
+        assert event_id == "tennis_event_001"
+        assert "tennis" in sport_key
+
+    @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_tennis_uses_tennis_keys_not_soccer(self, mock_httpx):
+        """With sport='tennis', it should NOT search soccer sport keys."""
+        call_args_list = []
+
+        def fake_get(url, **kwargs):
+            call_args_list.append(url)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = []
+            return mock_resp
+
+        mock_httpx.get.side_effect = fake_get
+
+        find_event("fake_key", "Eala A.", "Noskova L.", sport="tennis")
+
+        # Every URL searched should be a tennis sport key, not soccer
+        for url in call_args_list:
+            assert "tennis" in url
+            assert "soccer" not in url
+
+    @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_soccer_still_uses_soccer_keys(self, mock_httpx):
+        """Default (football) still searches soccer sport keys."""
+        call_args_list = []
+
+        def fake_get(url, **kwargs):
+            call_args_list.append(url)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = []
+            return mock_resp
+
+        mock_httpx.get.side_effect = fake_get
+
+        find_event("fake_key", "Manchester United", "Liverpool")
+
+        for url in call_args_list:
+            assert "soccer" in url
+
+    @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_invalid_sport_key_treated_as_none(self, mock_httpx):
+        """Swagger placeholder 'string' should be treated as None — searches all keys."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = []
+        mock_httpx.get.return_value = mock_response
+
+        # Should not raise, should search the full list
+        result = find_event("fake_key", "Team A", "Team B", sport_key="string")
+        assert result is None  # no match, but didn't crash
+
+
+class TestTennisExtractSharpOdds:
+    def test_extracts_tennis_odds_no_draw(self):
+        """Tennis events have no draw — home/away only."""
+        result = extract_sharp_odds_from_event(
+            SAMPLE_TENNIS_ODDS_RESPONSE,
+            home_team="Eala A.",
+            away_team="Noskova L.",
+        )
+        assert "pinnacle" in result
+        assert "betfair_ex_eu" in result
+        pinnacle = result["pinnacle"]
+        assert pinnacle["home"] == pytest.approx(2.55)
+        assert pinnacle["away"] == pytest.approx(1.55)
+        assert "draw" not in pinnacle
+
+    def test_tennis_sharp_odds_betfair_correct(self):
+        result = extract_sharp_odds_from_event(
+            SAMPLE_TENNIS_ODDS_RESPONSE,
+            home_team="Eala A.",
+            away_team="Noskova L.",
+        )
+        betfair = result["betfair_ex_eu"]
+        assert betfair["home"] == pytest.approx(2.60)
+        assert betfair["away"] == pytest.approx(1.50)

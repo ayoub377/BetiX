@@ -74,6 +74,15 @@ class TrackRequest(BaseModel):
             return None
         return str(v).strip()
 
+    @field_validator("sport_key", mode="before")
+    @classmethod
+    def sanitize_sport_key(cls, v):
+        """Ignore Swagger placeholder values — sport_key must look like 'soccer_epl'."""
+        from app.services.odds_api.odds_api_client import _is_valid_sport_key
+        if not _is_valid_sport_key(v):
+            return None
+        return str(v).strip()
+
     def validate_inputs(self):
         """Raises ValueError with a clear message if inputs are unusable."""
         if self.match_id:
@@ -214,7 +223,7 @@ async def track_match(body: TrackRequest, redis_client=Depends(get_redis)):
             result = await loop.run_in_executor(
                 None, find_event, odds_api_key,
                 meta.get("home_team", ""), meta.get("away_team", ""),
-                body.sport_key,
+                body.sport_key, sport.value,
             )
             if result:
                 meta["odds_api_event_id"] = result[0]

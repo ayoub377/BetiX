@@ -1,10 +1,11 @@
-name: Deploy FastAPI to ECS
+name: Deploy FastAPI to Cloud Run
 
 on:
   push:
     branches: [master]
     paths:
       - "transfermarkt-api/**"
+      - "cloudbuild.yaml"
       - ".github/workflows/deploy.yml"
 
 concurrency:
@@ -12,11 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AWS_REGION: eu-west-3
-  ECR_REPOSITORY: fastapi-app
-  ECS_CLUSTER: fastapi-cluster
-  ECS_SERVICE: fastapi-app-service
-  CONTAINER_NAME: fastapi-app
+  GCP_REGION: europe-west9
+  GAR_REPOSITORY: betting-api
+  SERVICE_NAME: fastapi-app
 
 permissions:
   id-token: write
@@ -32,69 +31,50 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. AWS Auth ──────────────────────────────────────────
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      # ── 2. GCP Auth via Workload Identity Federation ────────
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      # ── 3. Setup gcloud CLI ────────────────────────────────
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
-      # ── 3. Docker Build with BuildKit cache ──────────────────
+      # ── 4. Docker Auth to Artifact Registry ────────────────
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west9-docker.pkg.dev --quiet
+
+      # ── 5. Build & Push with Docker Buildx ─────────────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build, tag and push image to ECR
+      - name: Build and push image
         uses: docker/build-push-action@v6
         with:
           context: ./transfermarkt-api
           file: ./transfermarkt-api/Dockerfile
           push: true
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+            europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+            europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.SERVICE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
 
-      # ── 4. ECS Task Definition ───────────────────────────────
-      - name: Download current task definition
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition fastapi-app \
-            --query taskDefinition \
-            --output json | \
-          jq 'del(.enableFaultInjection, .registeredAt, .registeredBy, .status, .revision, .taskDefinitionArn, .requiresAttributes, .compatibilities)' \
-          > task-definition.json
-
-      - name: Update image in task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
+      # ── 6. Deploy to Cloud Run ─────────────────────────────
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
         with:
-          task-definition: task-definition.json
-          container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.GCP_REGION }}
+          image: europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
 
-      # ── 5. Deploy ────────────────────────────────────────────
-      - name: Deploy to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
-          wait-for-minutes: 10
-
-      # ── 6. Post-deploy verification ──────────────────────────
+      # ── 7. Post-deploy verification ────────────────────────
       - name: Verify deployment
         run: |
-          echo "✅ Deployed image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
-          aws ecs describe-services \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --services ${{ env.ECS_SERVICE }} \
-            --query 'services[0].{status:status,running:runningCount,desired:desiredCount,taskDef:taskDefinition}' \
-            --output table
+          echo "Deployed image: europe-west9-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+          gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.GCP_REGION }} \
+            --format="table(status.url, status.conditions.status)"

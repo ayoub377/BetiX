@@ -21,7 +21,7 @@ fuzzywuzzy = "^0.18.0"
 uvicorn = {extras = ["standard"], version = "^0.34.0"}
 selenium = "4.26.1"
 slowapi = "^0.1.9"
-boto3 = "^1.42.62"
+google-cloud-secret-manager = "^2.20.0"
 email-validator = "^2.3.0"
 shin = "^0.2.2"
 pydantic-settings = "^2.13.1"
