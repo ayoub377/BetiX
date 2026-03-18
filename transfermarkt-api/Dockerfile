@@ -68,4 +68,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:9000/api/docs || exit 1
 
 # Run FastAPI with optimized settings
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000", "--workers", "2", "--loop", "uvloop", "--http", "httptools"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9000", "--workers", "1", "--loop", "uvloop", "--http", "httptools"]
