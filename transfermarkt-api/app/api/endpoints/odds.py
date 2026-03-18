@@ -19,7 +19,6 @@ from app.core.config import redis_client, rate_limit_dependency
 from dotenv import load_dotenv
 from app.models.sport import SportType
 from app.services.flashscore_scraper.scraper_factory import get_scraper
-from app.services.flashscore_scraper.flashscore_scraper import FlashScoreScraper
 from app.services.odds_tracker.odds_tracker import (
     register_match, is_already_tracked,
     get_all_tracked_ids, get_match_meta,

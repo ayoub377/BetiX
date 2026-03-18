@@ -1,5 +1,5 @@
 # docker-compose.gce.yml
-# Run on a GCE VM to provide Redis + PostgreSQL for Cloud Run.
+# Run on a GCE VM to provide Redis + PostgreSQL + Scraper Service for Cloud Run.
 # Cloud Run connects via VPC connector to the VM's internal IP.
 #
 # Usage:
@@ -39,6 +39,28 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  scraper:
+    build:
+      context: ./scraper-service
+      dockerfile: Dockerfile
+    container_name: scraper-service
+    ports:
+      - "9001:9001"
+    restart: unless-stopped
+    environment:
+      - SCRAPER_API_KEY=${SCRAPER_API_KEY:-changeme}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 512m
 
 volumes:
   redis-data:

@@ -16,37 +16,23 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ============================================================
-# Stage 2: Final slim runtime image
+# Stage 2: Final slim runtime image (no Chrome — scraping is
+# delegated to the scraper-service on the GCE VM)
 # ============================================================
 FROM python:3.12-slim-bookworm AS runtime
 
-# Install only runtime system dependencies (Chromium for Selenium)
+# Install only runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
     curl \
-    xvfb \
-    libxi6 \
-    libgconf-2-4 \
-    libnss3 \
-    libxkbcommon-x11-0 \
-    libxrandr2 \
-    libgtk-3-0 \
-    libasound2 \
     libpq5 \
-    chromium \
-    chromium-driver \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Copy installed Python packages from builder
 COPY --from=builder /install /usr/local
 
-# Create non-root user for security (with a writable home for Chrome profile data)
+# Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -m -s /sbin/nologin appuser
-
-# Set environment variables for Chromium (Debian installs as 'chromium', not 'google-chrome')
-ENV CHROME_BIN=/usr/bin/chromium
-ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 
 WORKDIR /app
 
@@ -54,8 +40,7 @@ WORKDIR /app
 COPY --chown=appuser:appuser . .
 
 # Create writable directories for the non-root user
-RUN mkdir -p /app/trained_models /tmp/chrome-profile /tmp/chrome-crashes \
-    && chown -R appuser:appuser /app/trained_models /tmp/chrome-profile /tmp/chrome-crashes
+RUN mkdir -p /app/trained_models && chown -R appuser:appuser /app/trained_models
 
 # Switch to non-root user
 USER appuser
