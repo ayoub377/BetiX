@@ -34,15 +34,10 @@ SOCCER_SPORT_KEYS = [
     "soccer_turkey_super_league",
 ]
 
-# Tennis tours to search when no sport_key is provided for a tennis match
-TENNIS_SPORT_KEYS = [
-    "tennis_wta",
-    "tennis_atp",
-    "tennis_wta_doubles",
-    "tennis_atp_doubles",
-    "tennis_itf_women",
-    "tennis_itf_men",
-]
+# Tennis: The Odds API uses tournament-specific keys (e.g. "tennis_atp_miami_open",
+# "tennis_wta_indian_wells") — there is no generic "tennis_atp" endpoint.
+# Users must supply the exact sport_key when tracking tennis matches.
+TENNIS_SPORT_KEYS: list[str] = []
 
 # Map sport name → default keys list
 _DEFAULT_KEYS_BY_SPORT = {
@@ -64,15 +59,8 @@ SPORT_KEY_ALIASES = {
     "eredivisie": "soccer_netherlands_eredivisie",
     "primeira_liga": "soccer_portugal_primeira_liga",
     "super_lig": "soccer_turkey_super_league",
-    # Tennis
-    "tennis_atp": "tennis_atp",
-    "tennis_wta": "tennis_wta",
-    "atp": "tennis_atp",
-    "wta": "tennis_wta",
-    "atp_doubles": "tennis_atp_doubles",
-    "wta_doubles": "tennis_wta_doubles",
-    "itf_men": "tennis_itf_men",
-    "itf_women": "tennis_itf_women",
+    # Tennis — no aliases; users pass the full tournament key
+    # e.g. "tennis_atp_miami_open", "tennis_wta_indian_wells"
 }
 
 
@@ -141,6 +129,13 @@ def find_event(
         if sport_key and not _is_valid_sport_key(sport_key):
             logger.info("Ignoring invalid sport_key '%s', using sport=%s defaults.", sport_key, sport)
         keys_to_search = _DEFAULT_KEYS_BY_SPORT.get(sport, SOCCER_SPORT_KEYS)
+        if not keys_to_search:
+            logger.warning(
+                "No sport_key provided for sport=%s. Tennis requires a tournament-specific "
+                "key (e.g. 'tennis_atp_miami_open'). Skipping Odds API lookup.",
+                sport,
+            )
+            return None
 
     for sk in keys_to_search:
         try:
