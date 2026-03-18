@@ -24,8 +24,7 @@ from app.services.odds_tracker.odds_tracker import get_match_meta, get_all_track
 from app.models.database import init_db
 
 from app.models.sport import SportType
-from app.services.flashscore_scraper.flashscore_scraper import FlashScoreScraper
-from app.services.flashscore_scraper.tennis_scraper import TennisFlashScoreScraper
+from app.services.flashscore_scraper.scraper_factory import get_scraper
 from app.settings import settings
 from dotenv import load_dotenv
 
@@ -50,8 +49,8 @@ async def lifespan(app_: FastAPI):
 
     # 2. Setup shared resources — one scraper instance per sport
     scrapers = {
-        SportType.FOOTBALL: FlashScoreScraper(persist_outputs=False),
-        SportType.TENNIS: TennisFlashScoreScraper(persist_outputs=False),
+        SportType.FOOTBALL: get_scraper(SportType.FOOTBALL, persist_outputs=False),
+        SportType.TENNIS: get_scraper(SportType.TENNIS, persist_outputs=False),
     }
 
     # 3. Recover Jobs with Staggering

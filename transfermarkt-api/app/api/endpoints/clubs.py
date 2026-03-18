@@ -20,7 +20,8 @@ from app.services.clubs.profile import TransfermarktClubProfile
 from app.services.clubs.search import TransfermarktClubSearch
 from app.services.clubs.attendance import TransfermarktClubAttendance
 from app.services.clubs.staff import TransfermarktClubStaffs
-from app.services.flashscore_scraper.flashscore_scraper import FlashScoreScraper
+from app.services.flashscore_scraper.scraper_factory import get_scraper
+from app.models.sport import SportType
 from app.utils.utils import parse_market_value
 from starlette.responses import StreamingResponse
 
@@ -1077,7 +1078,7 @@ async def get_comparaison_result(home_team: str, away_team: str):
         await tracker.update(10, "Initializing scraper...")
         print(f"DEBUG: Initializing scraper")
         # Initialize scraper
-        scraper = FlashScoreScraper(persist_outputs=False)
+        scraper = get_scraper(SportType.FOOTBALL, persist_outputs=False)
 
         print(f"DEBUG: Updating progress to 15%")
         await tracker.update(15, "Searching for team match...")
