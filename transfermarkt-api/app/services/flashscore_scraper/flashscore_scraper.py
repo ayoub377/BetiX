@@ -2,6 +2,8 @@ import re
 import time
 import logging
 import json
+import subprocess
+import signal
 from datetime import datetime
 from pathlib import Path  # For creating an output directory if needed
 
@@ -69,8 +71,20 @@ class FlashScoreScraper:
         if self.persist_outputs:
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _kill_zombie_chrome():
+        """Kill any leftover Chrome/ChromeDriver processes to free memory."""
+        try:
+            subprocess.run(["pkill", "-f", "chromium"], timeout=5, capture_output=True)
+            subprocess.run(["pkill", "-f", "chromedriver"], timeout=5, capture_output=True)
+            time.sleep(1)
+        except Exception:
+            pass
+
     def _get_driver(self):
         self.logger.debug("Creating new WebDriver instance.")
+        # Kill any zombie Chrome processes from previous scrapes
+        self._kill_zombie_chrome()
         chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
         if chromedriver_path:
             service = Service(executable_path=chromedriver_path)
