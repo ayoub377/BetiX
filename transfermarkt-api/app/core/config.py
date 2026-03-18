@@ -9,8 +9,8 @@ REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
 redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True)
 
 # Odds tracking configuration
-SCRAPE_INTERVAL_SECONDS = 1200  # how often to poll for new odds (5 minutes)
-STOP_BEFORE_KICKOFF_SECONDS = 300  # stop tracking 2 minutes before match start
+SCRAPE_INTERVAL_SECONDS = 1200  # how often to poll for new odds (20 minutes)
+STOP_BEFORE_KICKOFF_SECONDS = 300  # stop tracking 5 minutes before match start
 
 # Rate limiting configuration from settings
 # To modify these values, either:

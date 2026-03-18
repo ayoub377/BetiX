@@ -88,8 +88,16 @@ class FlashScoreScraper:
         chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
         if chromedriver_path:
             service = Service(executable_path=chromedriver_path)
-            return webdriver.Chrome(service=service, options=self.options)
-        return webdriver.Chrome(options=self.options)
+            driver = webdriver.Chrome(service=service, options=self.options)
+        else:
+            driver = webdriver.Chrome(options=self.options)
+        # Force UTC timezone so FlashScore renders all times in UTC,
+        # regardless of the server's local timezone.
+        try:
+            driver.execute_cdp_cmd('Emulation.setTimezoneOverride', {'timezoneId': 'UTC'})
+        except Exception as e:
+            self.logger.warning("Could not set Chrome timezone to UTC: %s", e)
+        return driver
 
     def _navigate_to_lineups(self, driver, wait, match_id):
         """Navigate to the lineups tab. Raises on failure."""
@@ -923,27 +931,24 @@ class FlashScoreScraper:
           "26.02. 21:00"       — day/month only (current year implied)
           "21:00"              — time only (today implied, rare)
 
-        FlashScore displays times in CET/CEST (Europe/Paris).
-        Adjust FLASHSCORE_TZ if your instance differs.
+        Chrome is forced to UTC via CDP (Emulation.setTimezoneOverride),
+        so all times scraped from FlashScore are already in UTC.
         """
         import re
         from datetime import datetime, timezone
-        from zoneinfo import ZoneInfo
-
-        FLASHSCORE_TZ = ZoneInfo("Europe/Paris")  # CET/CEST
 
         if not raw:
             self.logger.warning("No start time text found for match %s", match_id)
             return None
 
-        now = datetime.now(FLASHSCORE_TZ)
+        now = datetime.now(timezone.utc)
 
         # Pattern 1: "26.02.2026 21:00" — full date with year
         match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})", raw)
         if match:
             day, month, year, hour, minute = map(int, match.groups())
-            local_dt = datetime(year, month, day, hour, minute, tzinfo=FLASHSCORE_TZ)
-            utc_iso = local_dt.astimezone(timezone.utc).isoformat()
+            utc_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+            utc_iso = utc_dt.isoformat()
             self.logger.info("Parsed start time (full): %s → %s", raw, utc_iso)
             return utc_iso
 
@@ -952,11 +957,11 @@ class FlashScoreScraper:
         if match:
             day, month, hour, minute = map(int, match.groups())
             year = now.year
+            utc_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
             # Roll over to next year if date already passed
-            local_dt = datetime(year, month, day, hour, minute, tzinfo=FLASHSCORE_TZ)
-            if local_dt < now:
-                local_dt = local_dt.replace(year=year + 1)
-            utc_iso = local_dt.astimezone(timezone.utc).isoformat()
+            if utc_dt < now:
+                utc_dt = utc_dt.replace(year=year + 1)
+            utc_iso = utc_dt.isoformat()
             self.logger.info("Parsed start time (no year): %s → %s", raw, utc_iso)
             return utc_iso
 
@@ -964,8 +969,8 @@ class FlashScoreScraper:
         match = re.search(r"(\d{2}):(\d{2})", raw)
         if match:
             hour, minute = map(int, match.groups())
-            local_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            utc_iso = local_dt.astimezone(timezone.utc).isoformat()
+            utc_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            utc_iso = utc_dt.isoformat()
             self.logger.info("Parsed start time (time only): %s → %s", raw, utc_iso)
             return utc_iso
 
