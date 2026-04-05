@@ -94,10 +94,33 @@ def _normalize(name: str) -> str:
     return name.strip().lower()
 
 
+def _extract_surname(name: str) -> str:
+    """Extract the surname from a player name.
+
+    FlashScore format: 'Kouame M.' → 'Kouame' (first token, initial at end).
+    Full name format: 'Maxime Kouame' → 'Kouame' (last token).
+    """
+    parts = name.split()
+    if not parts:
+        return name
+    # FlashScore: "Kouame M." — surname is first token
+    if len(parts) >= 2 and len(parts[-1].rstrip(".")) <= 2:
+        return parts[0]
+    # Full name: "Maxime Kouame" — surname is last token
+    return parts[-1]
+
+
 def _name_matches(a: str, b: str) -> bool:
     """Check if two names refer to the same entity (case-insensitive, substring)."""
     na, nb = _normalize(a), _normalize(b)
     return na in nb or nb in na
+
+
+def _surname_matches(a: str, b: str) -> bool:
+    """Check if two player names share the same surname."""
+    sa = _normalize(_extract_surname(a))
+    sb = _normalize(_extract_surname(b))
+    return sa == sb and len(sa) >= 3
 
 
 def _teams_match(api_home: str, api_away: str, home: str, away: str) -> bool:
@@ -177,6 +200,26 @@ def find_event(
                 event_id = event["id"]
                 logger.info(
                     "Single-team matched '%s vs %s' → event %s (%s vs %s) in %s",
+                    home_team, away_team, event_id,
+                    event.get("home_team"), event.get("away_team"), sk,
+                )
+                return event_id, sk
+
+            # Pass 3: surname match — handles FlashScore 'Kouame M.' vs
+            # Odds API 'Maxime Kouame' by comparing extracted surnames
+            surname_matches = []
+            for event in events:
+                api_home = event.get("home_team", "")
+                api_away = event.get("away_team", "")
+                if (_surname_matches(api_home, home_team)
+                        and _surname_matches(api_away, away_team)):
+                    surname_matches.append(event)
+
+            if len(surname_matches) == 1:
+                event = surname_matches[0]
+                event_id = event["id"]
+                logger.info(
+                    "Surname matched '%s vs %s' → event %s (%s vs %s) in %s",
                     home_team, away_team, event_id,
                     event.get("home_team"), event.get("away_team"), sk,
                 )

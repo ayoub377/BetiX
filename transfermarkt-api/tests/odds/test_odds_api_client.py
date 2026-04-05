@@ -437,6 +437,33 @@ class TestTennisFindEvent:
         assert sport_key == "tennis_wta_miami_open"
 
     @patch("app.services.odds_api.odds_api_client.httpx")
+    def test_finds_tennis_event_with_abbreviated_vs_full_names(self, mock_httpx):
+        """FlashScore 'Kouame M.' should match Odds API 'Maxime Kouame'."""
+        events_full_names = [
+            {
+                "id": "tennis_monte_carlo_001",
+                "sport_key": "tennis_atp_monte_carlo_masters",
+                "home_team": "Maxime Kouame",
+                "away_team": "Ugo Humbert",
+                "commence_time": "2026-04-05T14:00:00Z",
+                "bookmakers": [],
+            },
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = events_full_names
+        mock_httpx.get.return_value = mock_response
+
+        result = find_event(
+            "fake_key", "Kouame M.", "Humbert U.",
+            sport_key="tennis_atp_monte_carlo_masters", sport="tennis",
+        )
+        assert result is not None
+        event_id, sport_key = result
+        assert event_id == "tennis_monte_carlo_001"
+        assert sport_key == "tennis_atp_monte_carlo_masters"
+
+    @patch("app.services.odds_api.odds_api_client.httpx")
     def test_soccer_still_uses_soccer_keys(self, mock_httpx):
         """Default (football) still searches soccer sport keys."""
         call_args_list = []
