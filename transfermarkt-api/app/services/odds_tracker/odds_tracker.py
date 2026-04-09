@@ -129,6 +129,17 @@ def _update_match_status_in_db(match_id: str, status: str):
         logger.warning("DB status update failed for match %s: %s", match_id, e)
 
 
+async def update_match_meta_field(redis_client, match_id: str, field: str, value):
+    """Update a single field in the match metadata stored in Redis + DB."""
+    raw = await redis_client.get(match_meta_key(match_id))
+    if not raw:
+        return
+    meta = json.loads(raw)
+    meta[field] = value
+    await redis_client.set(match_meta_key(match_id), json.dumps(meta))
+    logger.info("Updated %s for match %s: %s", field, match_id, value)
+
+
 async def unregister_match(redis_client, match_id: str):
     """Remove match from active tracking index (keep history intact)."""
     await redis_client.srem(TRACKED_INDEX_KEY, match_id)
