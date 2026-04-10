@@ -66,6 +66,21 @@ def update_match_status(session: Session, match_id: str, status: str):
         logger.info("Updated match %s status to '%s'.", match_id, status)
 
 
+def update_match_start_time(
+    session: Session,
+    match_id: str,
+    start_time: Optional[str],
+    start_time_raw: Optional[str],
+):
+    """Update the start_time / start_time_raw fields of a tracked match."""
+    row = session.query(TrackedMatch).filter_by(match_id=match_id).first()
+    if row:
+        row.start_time = start_time
+        row.start_time_raw = start_time_raw
+        session.commit()
+        logger.info("Updated match %s start_time to '%s'.", match_id, start_time)
+
+
 def get_match_snapshots(session: Session, match_id: str) -> list[dict]:
     """Return all snapshots for a match, ordered by insertion order."""
     rows = (
