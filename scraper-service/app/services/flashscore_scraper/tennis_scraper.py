@@ -73,12 +73,16 @@ class TennisFlashScoreScraper(FlashScoreScraper):
                 "//span[contains(@class,'startTime')]",
             ])
 
+            tz_offset_minutes = self._detect_browser_tz_offset(driver)
+
             self.logger.info(
-                "Raw tennis match info — player1: '%s' | player2: '%s' | start_time: '%s'",
-                player1, player2, raw_start_time,
+                "Raw tennis match info — player1: '%s' | player2: '%s' | start_time: '%s' | browser_tz_offset=%s min",
+                player1, player2, raw_start_time, tz_offset_minutes,
             )
 
-            start_time_utc = self._parse_flashscore_datetime(raw_start_time, match_id)
+            start_time_utc = self._parse_flashscore_datetime(
+                raw_start_time, match_id, tz_offset_minutes=tz_offset_minutes,
+            )
 
             return {
                 "player1": player1 or "unknown",

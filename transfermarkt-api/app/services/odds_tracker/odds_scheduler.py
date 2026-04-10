@@ -9,7 +9,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.services.odds_tracker.odds_tracker import (
     store_odds_snapshot, get_match_meta,
-    unregister_match, update_match_meta_field, TRACKED_INDEX_KEY
+    unregister_match, update_match_meta_field, TRACKED_INDEX_KEY,
+    _update_match_start_time_in_db,
 )
 from app.core.config import SCRAPE_INTERVAL_SECONDS, STOP_BEFORE_KICKOFF_SECONDS
 
@@ -56,13 +57,20 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
             if fresh_start and meta:
                 old_start = meta.get("start_time")
                 if fresh_start != old_start:
+                    fresh_raw = fresh_info.get("start_time_raw")
                     logger.info(
                         "Match %s start time changed: %s → %s",
                         match_id, old_start, fresh_start,
                     )
                     await update_match_meta_field(redis_client, match_id, "start_time", fresh_start)
-                    await update_match_meta_field(redis_client, match_id, "start_time_raw", fresh_info.get("start_time_raw"))
+                    await update_match_meta_field(redis_client, match_id, "start_time_raw", fresh_raw)
                     meta["start_time"] = fresh_start
+                    # Keep PostgreSQL in sync with Redis — persist_match()
+                    # is insert-only, so without this the DB row stays stale.
+                    asyncio.get_event_loop().run_in_executor(
+                        None, _update_match_start_time_in_db,
+                        match_id, fresh_start, fresh_raw,
+                    )
         except Exception as e:
             logger.warning("Failed to refresh start time for %s: %s", match_id, e)
 

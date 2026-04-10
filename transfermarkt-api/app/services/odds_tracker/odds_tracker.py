@@ -103,6 +103,20 @@ def _persist_match_to_db(match_id: str, meta: dict):
         logger.warning("DB persist failed for match %s: %s", match_id, e)
 
 
+def _update_match_start_time_in_db(match_id: str, start_time: str | None, start_time_raw: str | None):
+    """Update start_time in PostgreSQL. Runs in a thread — must be sync."""
+    try:
+        from app.models.database import SessionLocal
+        from app.services.odds_tracker.snapshot_persistence import update_match_start_time
+        session = SessionLocal()
+        try:
+            update_match_start_time(session, match_id, start_time, start_time_raw)
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("DB start_time update failed for match %s: %s", match_id, e)
+
+
 async def register_match(redis_client, match_id: str, meta: dict):
     """Persist match metadata to Redis and PostgreSQL, add to tracking index."""
     await redis_client.set(match_meta_key(match_id), json.dumps(meta))
