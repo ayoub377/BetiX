@@ -129,6 +129,9 @@ export default function Navbar() {
                                 <Link href="/arbitrage" className="block py-2 px-4 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400 rounded-md transition-colors text-sm">
                                     Arbitrage Opportunities
                                 </Link>
+                                <Link href="/odds" className="block py-2 px-4 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400 rounded-md transition-colors text-sm">
+                                    Odds Tracker
+                                </Link>
                             </div>
                         </div>
 
@@ -180,6 +183,7 @@ export default function Navbar() {
                                 <div className="ml-4 mt-2 pt-2 border-l border-gray-200 dark:border-slate-700 pl-3 flex flex-col space-y-1">
                                     <Link href="/pro-analysis" className="block px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={() => setIsMenuOpen(false)}>Lineup Comparison</Link>
                                     <Link href="/arbitrage" className="block px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={() => setIsMenuOpen(false)}>Arbitrage Opportunities</Link>
+                                    <Link href="/odds" className="block px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={() => setIsMenuOpen(false)}>Odds Tracker</Link>
                                 </div>
                             )}
                         </div>
