@@ -109,14 +109,9 @@ class TestConstants:
     def test_soccer_sport_keys_includes_epl(self):
         assert "soccer_epl" in SOCCER_SPORT_KEYS
 
-    def test_tennis_sport_keys_not_empty(self):
-        assert len(TENNIS_SPORT_KEYS) > 0
-
-    def test_tennis_sport_keys_includes_atp(self):
-        assert "tennis_atp" in TENNIS_SPORT_KEYS
-
-    def test_tennis_sport_keys_includes_wta(self):
-        assert "tennis_wta" in TENNIS_SPORT_KEYS
+    def test_tennis_sport_keys_is_empty(self):
+        """Tennis has no default keys — users must provide the exact tournament key."""
+        assert TENNIS_SPORT_KEYS == []
 
 
 # ── Sport key aliases ─────────────────────────────────────────────
@@ -134,11 +129,16 @@ class TestSportKeyAliases:
     def test_premier_league_resolves(self):
         assert resolve_sport_key("premier_league") == "soccer_epl"
 
-    def test_atp_resolves(self):
-        assert resolve_sport_key("atp") == "tennis_atp"
+    def test_tournament_key_passes_through(self):
+        """Full tournament keys like 'tennis_atp_miami_open' pass through directly."""
+        assert resolve_sport_key("tennis_atp_miami_open") == "tennis_atp_miami_open"
 
-    def test_wta_resolves(self):
-        assert resolve_sport_key("wta") == "tennis_wta"
+    def test_atp_alias_removed(self):
+        """Generic 'atp' alias no longer resolves — need exact tournament key."""
+        assert resolve_sport_key("atp") is None
+
+    def test_wta_alias_removed(self):
+        assert resolve_sport_key("wta") is None
 
     def test_raw_odds_api_key_passes_through(self):
         assert resolve_sport_key("soccer_epl") == "soccer_epl"
@@ -414,40 +414,54 @@ SAMPLE_TENNIS_ODDS_RESPONSE = {
 
 
 class TestTennisFindEvent:
+    def test_tennis_without_sport_key_returns_none(self):
+        """Tennis with no sport_key should return None (no default keys to search)."""
+        result = find_event("fake_key", "Eala A.", "Noskova L.", sport="tennis")
+        assert result is None
+
     @patch("app.services.odds_api.odds_api_client.httpx")
-    def test_finds_tennis_event_by_sport(self, mock_httpx):
-        """When sport='tennis', should search TENNIS_SPORT_KEYS."""
+    def test_finds_tennis_event_with_tournament_key(self, mock_httpx):
+        """Tennis with exact tournament key should find the event."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = SAMPLE_TENNIS_EVENTS
         mock_httpx.get.return_value = mock_response
 
-        result = find_event("fake_key", "Eala A.", "Noskova L.", sport="tennis")
+        result = find_event(
+            "fake_key", "Eala A.", "Noskova L.",
+            sport_key="tennis_wta_miami_open", sport="tennis",
+        )
         assert result is not None
         event_id, sport_key = result
         assert event_id == "tennis_event_001"
-        assert "tennis" in sport_key
+        assert sport_key == "tennis_wta_miami_open"
 
     @patch("app.services.odds_api.odds_api_client.httpx")
-    def test_tennis_uses_tennis_keys_not_soccer(self, mock_httpx):
-        """With sport='tennis', it should NOT search soccer sport keys."""
-        call_args_list = []
+    def test_finds_tennis_event_with_abbreviated_vs_full_names(self, mock_httpx):
+        """FlashScore 'Kouame M.' should match Odds API 'Maxime Kouame'."""
+        events_full_names = [
+            {
+                "id": "tennis_monte_carlo_001",
+                "sport_key": "tennis_atp_monte_carlo_masters",
+                "home_team": "Maxime Kouame",
+                "away_team": "Ugo Humbert",
+                "commence_time": "2026-04-05T14:00:00Z",
+                "bookmakers": [],
+            },
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = events_full_names
+        mock_httpx.get.return_value = mock_response
 
-        def fake_get(url, **kwargs):
-            call_args_list.append(url)
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = []
-            return mock_resp
-
-        mock_httpx.get.side_effect = fake_get
-
-        find_event("fake_key", "Eala A.", "Noskova L.", sport="tennis")
-
-        # Every URL searched should be a tennis sport key, not soccer
-        for url in call_args_list:
-            assert "tennis" in url
-            assert "soccer" not in url
+        result = find_event(
+            "fake_key", "Kouame M.", "Humbert U.",
+            sport_key="tennis_atp_monte_carlo_masters", sport="tennis",
+        )
+        assert result is not None
+        event_id, sport_key = result
+        assert event_id == "tennis_monte_carlo_001"
+        assert sport_key == "tennis_atp_monte_carlo_masters"
 
     @patch("app.services.odds_api.odds_api_client.httpx")
     def test_soccer_still_uses_soccer_keys(self, mock_httpx):

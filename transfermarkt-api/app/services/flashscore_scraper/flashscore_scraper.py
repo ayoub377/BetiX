@@ -889,12 +889,22 @@ class FlashScoreScraper:
                 "//span[contains(@class,'startTime')]",
             ])
 
+            # Detect Chrome's actual timezone offset (in minutes) at this page.
+            # JS getTimezoneOffset() returns (UTC - local) in minutes, e.g.
+            # UTC → 0, CET → -60, Morocco GMT+1 → -60, PST → 480.
+            # We pass it to the parser so that even if setTimezoneOverride
+            # silently failed we still convert FlashScore's rendered time
+            # to UTC correctly.
+            tz_offset_minutes = self._detect_browser_tz_offset(driver)
+
             self.logger.info(
-                "Raw match info — home: '%s' | away: '%s' | start_time: '%s'",
-                home_team, away_team, raw_start_time
+                "Raw match info — home: '%s' | away: '%s' | start_time: '%s' | browser_tz_offset=%s min",
+                home_team, away_team, raw_start_time, tz_offset_minutes,
             )
 
-            start_time_utc = self._parse_flashscore_datetime(raw_start_time, match_id)
+            start_time_utc = self._parse_flashscore_datetime(
+                raw_start_time, match_id, tz_offset_minutes=tz_offset_minutes,
+            )
 
             return {
                 "home_team": home_team or "unknown",
@@ -922,7 +932,28 @@ class FlashScoreScraper:
                 continue
         return None
 
-    def _parse_flashscore_datetime(self, raw: str | None, match_id: str) -> str | None:
+    def _detect_browser_tz_offset(self, driver) -> int:
+        """
+        Ask the currently-loaded page what timezone Chrome is actually
+        using, via ``new Date().getTimezoneOffset()``.
+
+        Returns the offset in minutes such that ``UTC = local + offset``
+        (JS convention — positive = west of UTC). Returns 0 on any
+        failure, which is equivalent to assuming the time is already UTC.
+        """
+        try:
+            offset = driver.execute_script("return new Date().getTimezoneOffset();")
+            return int(offset)
+        except Exception as e:
+            self.logger.warning("Could not detect browser tz offset (assuming UTC): %s", e)
+            return 0
+
+    def _parse_flashscore_datetime(
+        self,
+        raw: str | None,
+        match_id: str,
+        tz_offset_minutes: int = 0,
+    ) -> str | None:
         """
         Parse FlashScore date strings into UTC ISO 8601.
 
@@ -931,11 +962,15 @@ class FlashScoreScraper:
           "26.02. 21:00"       — day/month only (current year implied)
           "21:00"              — time only (today implied, rare)
 
-        Chrome is forced to UTC via CDP (Emulation.setTimezoneOverride),
-        so all times scraped from FlashScore are already in UTC.
+        We try to force Chrome to UTC via CDP (Emulation.setTimezoneOverride),
+        but that can fail silently. The caller should therefore detect the
+        actual browser timezone with ``_detect_browser_tz_offset`` and pass
+        it here as ``tz_offset_minutes`` (JS convention: ``UTC = local + offset``).
+        Defaults to 0 for back-compat — equivalent to assuming the raw
+        string is already in UTC.
         """
         import re
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
 
         if not raw:
             self.logger.warning("No start time text found for match %s", match_id)
@@ -943,13 +978,18 @@ class FlashScoreScraper:
 
         now = datetime.now(timezone.utc)
 
+        def _to_utc(year: int, month: int, day: int, hour: int, minute: int) -> datetime:
+            """Convert a naive local datetime (in the browser's tz) to UTC."""
+            local_dt = datetime(year, month, day, hour, minute)
+            return (local_dt + timedelta(minutes=tz_offset_minutes)).replace(tzinfo=timezone.utc)
+
         # Pattern 1: "26.02.2026 21:00" — full date with year
         match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})", raw)
         if match:
             day, month, year, hour, minute = map(int, match.groups())
-            utc_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+            utc_dt = _to_utc(year, month, day, hour, minute)
             utc_iso = utc_dt.isoformat()
-            self.logger.info("Parsed start time (full): %s → %s", raw, utc_iso)
+            self.logger.info("Parsed start time (full): %s → %s (tz_offset=%s)", raw, utc_iso, tz_offset_minutes)
             return utc_iso
 
         # Pattern 2: "26.02. 21:00" — no year, assume current year
@@ -957,21 +997,21 @@ class FlashScoreScraper:
         if match:
             day, month, hour, minute = map(int, match.groups())
             year = now.year
-            utc_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+            utc_dt = _to_utc(year, month, day, hour, minute)
             # Roll over to next year if date already passed
             if utc_dt < now:
-                utc_dt = utc_dt.replace(year=year + 1)
+                utc_dt = _to_utc(year + 1, month, day, hour, minute)
             utc_iso = utc_dt.isoformat()
-            self.logger.info("Parsed start time (no year): %s → %s", raw, utc_iso)
+            self.logger.info("Parsed start time (no year): %s → %s (tz_offset=%s)", raw, utc_iso, tz_offset_minutes)
             return utc_iso
 
         # Pattern 3: "21:00" — time only, assume today
         match = re.search(r"(\d{2}):(\d{2})", raw)
         if match:
             hour, minute = map(int, match.groups())
-            utc_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            utc_dt = _to_utc(now.year, now.month, now.day, hour, minute)
             utc_iso = utc_dt.isoformat()
-            self.logger.info("Parsed start time (time only): %s → %s", raw, utc_iso)
+            self.logger.info("Parsed start time (time only): %s → %s (tz_offset=%s)", raw, utc_iso, tz_offset_minutes)
             return utc_iso
 
         self.logger.warning("Could not parse start time '%s' for match %s", raw, match_id)

@@ -34,15 +34,10 @@ SOCCER_SPORT_KEYS = [
     "soccer_turkey_super_league",
 ]
 
-# Tennis tours to search when no sport_key is provided for a tennis match
-TENNIS_SPORT_KEYS = [
-    "tennis_wta",
-    "tennis_atp",
-    "tennis_wta_doubles",
-    "tennis_atp_doubles",
-    "tennis_itf_women",
-    "tennis_itf_men",
-]
+# Tennis: The Odds API uses tournament-specific keys (e.g. "tennis_atp_miami_open",
+# "tennis_wta_indian_wells") — there is no generic "tennis_atp" endpoint.
+# Users must supply the exact sport_key when tracking tennis matches.
+TENNIS_SPORT_KEYS: list[str] = []
 
 # Map sport name → default keys list
 _DEFAULT_KEYS_BY_SPORT = {
@@ -64,15 +59,8 @@ SPORT_KEY_ALIASES = {
     "eredivisie": "soccer_netherlands_eredivisie",
     "primeira_liga": "soccer_portugal_primeira_liga",
     "super_lig": "soccer_turkey_super_league",
-    # Tennis
-    "tennis_atp": "tennis_atp",
-    "tennis_wta": "tennis_wta",
-    "atp": "tennis_atp",
-    "wta": "tennis_wta",
-    "atp_doubles": "tennis_atp_doubles",
-    "wta_doubles": "tennis_wta_doubles",
-    "itf_men": "tennis_itf_men",
-    "itf_women": "tennis_itf_women",
+    # Tennis — no aliases; users pass the full tournament key
+    # e.g. "tennis_atp_miami_open", "tennis_wta_indian_wells"
 }
 
 
@@ -106,10 +94,33 @@ def _normalize(name: str) -> str:
     return name.strip().lower()
 
 
+def _extract_surname(name: str) -> str:
+    """Extract the surname from a player name.
+
+    FlashScore format: 'Kouame M.' → 'Kouame' (first token, initial at end).
+    Full name format: 'Maxime Kouame' → 'Kouame' (last token).
+    """
+    parts = name.split()
+    if not parts:
+        return name
+    # FlashScore: "Kouame M." — surname is first token
+    if len(parts) >= 2 and len(parts[-1].rstrip(".")) <= 2:
+        return parts[0]
+    # Full name: "Maxime Kouame" — surname is last token
+    return parts[-1]
+
+
 def _name_matches(a: str, b: str) -> bool:
     """Check if two names refer to the same entity (case-insensitive, substring)."""
     na, nb = _normalize(a), _normalize(b)
     return na in nb or nb in na
+
+
+def _surname_matches(a: str, b: str) -> bool:
+    """Check if two player names share the same surname."""
+    sa = _normalize(_extract_surname(a))
+    sb = _normalize(_extract_surname(b))
+    return sa == sb and len(sa) >= 3
 
 
 def _teams_match(api_home: str, api_away: str, home: str, away: str) -> bool:
@@ -141,6 +152,13 @@ def find_event(
         if sport_key and not _is_valid_sport_key(sport_key):
             logger.info("Ignoring invalid sport_key '%s', using sport=%s defaults.", sport_key, sport)
         keys_to_search = _DEFAULT_KEYS_BY_SPORT.get(sport, SOCCER_SPORT_KEYS)
+        if not keys_to_search:
+            logger.warning(
+                "No sport_key provided for sport=%s. Tennis requires a tournament-specific "
+                "key (e.g. 'tennis_atp_miami_open'). Skipping Odds API lookup.",
+                sport,
+            )
+            return None
 
     for sk in keys_to_search:
         try:
@@ -182,6 +200,26 @@ def find_event(
                 event_id = event["id"]
                 logger.info(
                     "Single-team matched '%s vs %s' → event %s (%s vs %s) in %s",
+                    home_team, away_team, event_id,
+                    event.get("home_team"), event.get("away_team"), sk,
+                )
+                return event_id, sk
+
+            # Pass 3: surname match — handles FlashScore 'Kouame M.' vs
+            # Odds API 'Maxime Kouame' by comparing extracted surnames
+            surname_matches = []
+            for event in events:
+                api_home = event.get("home_team", "")
+                api_away = event.get("away_team", "")
+                if (_surname_matches(api_home, home_team)
+                        and _surname_matches(api_away, away_team)):
+                    surname_matches.append(event)
+
+            if len(surname_matches) == 1:
+                event = surname_matches[0]
+                event_id = event["id"]
+                logger.info(
+                    "Surname matched '%s vs %s' → event %s (%s vs %s) in %s",
                     home_team, away_team, event_id,
                     event.get("home_team"), event.get("away_team"), sk,
                 )

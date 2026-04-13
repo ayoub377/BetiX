@@ -62,7 +62,7 @@ class TrackRequest(BaseModel):
     home_team: Optional[str] = None
     player_name: Optional[str] = None  # Tennis: alternative to home_team
     match_id: Optional[str] = None
-    sport_key: Optional[str] = None  # e.g. "soccer_epl" — helps Odds API event lookup
+    sport_key: Optional[str] = None  # e.g. "soccer_epl", "tennis_atp_miami_open"
     sport: SportType = SportType.FOOTBALL  # Defaults to football for backward compatibility
 
     @field_validator("match_id", mode="before")
