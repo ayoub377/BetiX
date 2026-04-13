@@ -241,7 +241,7 @@ export default function ArbitragePage() {
         params.sports = sports.trim();
       }
 
-      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000'; // Use environment variable
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000/api'; // Use environment variable
       const response = await axios.get<ArbitrageResponse>(`${API_BASE_URL}/arbitrage/`, { params });
 
       setOpportunities(response.data.opportunities.sort((a,b) => b.profit_margin_percentage - a.profit_margin_percentage));

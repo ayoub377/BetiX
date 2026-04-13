@@ -6,7 +6,7 @@ import type {
   TrackedMatchesResponse,
 } from '@/types/odds';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000/api';
 
 export function useTrackedMatches() {
   const [matches, setMatches] = useState<TrackedMatch[]>([]);
