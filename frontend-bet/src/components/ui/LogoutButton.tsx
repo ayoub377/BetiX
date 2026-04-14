@@ -32,6 +32,7 @@ const LogoutButton: React.FC<LogoutButtonProps> = ({
 
   const handleLogout = async () => {
     try {
+      if (!firebaseAuthInstance) return;
       await firebaseSignOut(firebaseAuthInstance);
       // The AuthContext's onAuthStateChanged listener should automatically update
       // global user state (firebaseUser, customUserProfile, isProUser) to null/false.

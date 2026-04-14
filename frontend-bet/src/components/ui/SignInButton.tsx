@@ -25,6 +25,10 @@ const SignInButton: React.FC<SignInButtonProps> = () => {
   useEffect(() => {
     isMounted.current = true;
 
+    if (!auth) {
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (!isMounted.current) {
         console.warn("SignInButton unmounted, skipping auth state change reaction.");
@@ -67,6 +71,7 @@ const SignInButton: React.FC<SignInButtonProps> = () => {
   }, [router, pathname]); // Add pathname to the dependency array
 
   const signInWithGoogle = async () => {
+    if (!auth) return;
     setLoading(true);
     try {
       const provider = new GoogleAuthProvider();
@@ -95,6 +100,7 @@ const SignInButton: React.FC<SignInButtonProps> = () => {
   };
 
   const handleSignOut = async () => {
+    if (!auth) return;
     setLoading(true);
     try {
       await signOut(auth);
