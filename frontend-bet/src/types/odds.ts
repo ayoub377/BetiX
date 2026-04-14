@@ -48,10 +48,11 @@ export interface TrackedMatch {
   match_id: string;
   meta: TrackedMatchMeta;
   job_active: boolean;
+  is_live?: boolean;
 }
 
-export interface TrackedMatchesResponse {
-  tracked_matches: TrackedMatch[];
+export interface AllMatchesResponse {
+  matches: TrackedMatch[];
   count: number;
 }
 

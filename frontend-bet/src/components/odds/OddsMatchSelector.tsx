@@ -108,10 +108,14 @@ export default function OddsMatchSelector({
                   className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
                     m.job_active
                       ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                      : m.is_live
+                      ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
+                      : m.meta.status === 'completed'
+                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
                       : 'bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-gray-400'
                   }`}
                 >
-                  {m.job_active ? 'Live' : 'Stopped'}
+                  {m.job_active ? 'Live' : m.meta.status === 'completed' ? 'Completed' : 'Stopped'}
                 </span>
                 <span className="text-[10px] text-gray-400 dark:text-gray-500 capitalize">
                   {sport}
