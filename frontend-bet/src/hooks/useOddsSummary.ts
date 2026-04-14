@@ -3,7 +3,7 @@ import axios from 'axios';
 import type {
   OddsSummaryResponse,
   TrackedMatch,
-  TrackedMatchesResponse,
+  AllMatchesResponse,
 } from '@/types/odds';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000/api';
@@ -17,10 +17,10 @@ export function useTrackedMatches() {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await axios.get<TrackedMatchesResponse>(
-        `${API_BASE_URL}/odds/tracked`
+      const res = await axios.get<AllMatchesResponse>(
+        `${API_BASE_URL}/odds/matches`
       );
-      setMatches(res.data.tracked_matches);
+      setMatches(res.data.matches);
     } catch (err) {
       console.error('Failed to fetch tracked matches:', err);
       setError('Could not load tracked matches. Is the backend running?');

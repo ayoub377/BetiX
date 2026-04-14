@@ -31,6 +31,7 @@ from app.models.database import SessionLocal
 from app.services.odds_tracker.snapshot_persistence import (
     get_match_snapshots as db_get_snapshots,
     get_match_meta_from_db,
+    get_all_matches_from_db,
 )
 
 load_dotenv()
@@ -299,6 +300,35 @@ async def list_tracked_matches(redis_client=Depends(get_redis)):
         })
 
     return {"tracked_matches": matches, "count": len(matches)}
+
+
+@router.get("/matches")
+async def list_all_matches(redis_client=Depends(get_redis)):
+    """
+    Return all matches ever tracked (from PostgreSQL), enriched with
+    live status from Redis when available.
+    """
+    session = SessionLocal()
+    try:
+        db_matches = get_all_matches_from_db(session)
+    finally:
+        session.close()
+
+    # Enrich with live tracking status from Redis
+    active_ids = set(await get_all_tracked_ids(redis_client))
+
+    results = []
+    for m in db_matches:
+        match_id = m["match_id"]
+        job_active = scheduler.get_job(f"odds_scrape_{match_id}") is not None
+        results.append({
+            "match_id": match_id,
+            "meta": m,
+            "job_active": job_active,
+            "is_live": match_id in active_ids,
+        })
+
+    return {"matches": results, "count": len(results)}
 
 
 @router.get("/history/{match_id}")

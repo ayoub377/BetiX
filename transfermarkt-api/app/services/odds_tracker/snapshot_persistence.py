@@ -108,6 +108,30 @@ def get_match_snapshots(session: Session, match_id: str) -> list[dict]:
     return result
 
 
+def get_all_matches_from_db(session: Session) -> list[dict]:
+    """Return all matches ever tracked, most recent first."""
+    rows = (
+        session.query(TrackedMatch)
+        .order_by(TrackedMatch.id.desc())
+        .all()
+    )
+    return [
+        {
+            "match_id": r.match_id,
+            "sport": r.sport or "football",
+            "home_team": r.home_team,
+            "away_team": r.away_team,
+            "start_time": r.start_time,
+            "start_time_raw": r.start_time_raw,
+            "status": r.status,
+            "tracked_since": r.tracked_since,
+            "odds_api_event_id": r.odds_api_event_id,
+            "odds_api_sport_key": r.odds_api_sport_key,
+        }
+        for r in rows
+    ]
+
+
 def get_match_meta_from_db(session: Session, match_id: str) -> Optional[dict]:
     """Return match metadata as a dict, or None if not found."""
     row = session.query(TrackedMatch).filter_by(match_id=match_id).first()
