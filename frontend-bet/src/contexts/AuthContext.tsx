@@ -129,6 +129,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   useEffect(() => {
+    // Guard: firebaseAuthInstance is undefined during SSR / static prerender
+    if (!firebaseAuthInstance) {
+      setIsLoadingAuth(false);
+      return;
+    }
     const unsubscribe = onAuthStateChanged(firebaseAuthInstance, (user) => {
       setFirebaseUser(user); // Set Firebase user immediately
       fetchOrRefreshCustomProfile(user); // Then fetch/refresh custom profile which sets isLoadingAuth
