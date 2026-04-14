@@ -16,7 +16,12 @@ import {
 } from 'chart.js';
 import 'chartjs-adapter-date-fns';
 import type { OddsSummaryResponse, OutcomeKey } from '@/types/odds';
-import { OUTCOME_LABELS, SHARP_BOOKMAKER_LABELS } from '@/types/odds';
+import {
+  OUTCOME_LABELS,
+  SHARP_BOOKMAKER_LABELS,
+  FOOTBALL_OUTCOMES,
+  TENNIS_OUTCOMES,
+} from '@/types/odds';
 
 ChartJS.register(
   CategoryScale,
@@ -31,10 +36,12 @@ ChartJS.register(
 );
 
 // Color palette — muted, professional tones
-const OUTCOME_COLORS: Record<OutcomeKey, { main: string; bg: string }> = {
-  home: { main: 'rgb(34, 197, 94)', bg: 'rgba(34, 197, 94, 0.08)' },   // green
-  draw: { main: 'rgb(59, 130, 246)', bg: 'rgba(59, 130, 246, 0.08)' },  // blue
-  away: { main: 'rgb(239, 68, 68)', bg: 'rgba(239, 68, 68, 0.08)' },    // red
+const OUTCOME_COLORS: Record<string, { main: string; bg: string }> = {
+  home:    { main: 'rgb(34, 197, 94)',  bg: 'rgba(34, 197, 94, 0.08)' },   // green
+  draw:    { main: 'rgb(59, 130, 246)', bg: 'rgba(59, 130, 246, 0.08)' },  // blue
+  away:    { main: 'rgb(239, 68, 68)',  bg: 'rgba(239, 68, 68, 0.08)' },   // red
+  player1: { main: 'rgb(34, 197, 94)',  bg: 'rgba(34, 197, 94, 0.08)' },   // green
+  player2: { main: 'rgb(239, 68, 68)',  bg: 'rgba(239, 68, 68, 0.08)' },   // red
 };
 
 const SHARP_COLORS: Record<string, string> = {
@@ -48,10 +55,24 @@ interface OddsSummaryChartProps {
 }
 
 export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
-  const [activeOutcome, setActiveOutcome] = useState<OutcomeKey>('home');
-  const [showSharpOdds, setShowSharpOdds] = useState(true);
+  const { history, sport } = summary;
+  const isTennis = sport === 'tennis';
 
-  const { history } = summary;
+  const outcomes: OutcomeKey[] = isTennis ? TENNIS_OUTCOMES : FOOTBALL_OUTCOMES;
+
+  // Build dynamic labels for tennis using player names from match label
+  const outcomeDisplayLabels = useMemo(() => {
+    if (!isTennis) return OUTCOME_LABELS;
+    // summary.match is "Player1 vs Player2"
+    const parts = summary.match.split(' vs ');
+    return {
+      ...OUTCOME_LABELS,
+      player1: parts[0]?.trim() || 'Player 1',
+      player2: parts[1]?.trim() || 'Player 2',
+    };
+  }, [isTennis, summary.match]);
+
+  const [activeOutcome, setActiveOutcome] = useState<OutcomeKey>(outcomes[0]);
 
   // Extract which sharp bookmakers appear in the data
   const availableSharps = useMemo(() => {
@@ -64,18 +85,23 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
     return Array.from(sharps);
   }, [history]);
 
+  const [showSharpOdds, setShowSharpOdds] = useState(true);
+
   // Build chart datasets
   const chartData = useMemo(() => {
     const timestamps = history.map((s) => s.timestamp);
-    const color = OUTCOME_COLORS[activeOutcome];
+    const color = OUTCOME_COLORS[activeOutcome] || OUTCOME_COLORS.home;
 
     // Main bookmaker line
-    const mainData = history.map((s) => s[activeOutcome] ?? null);
+    const mainData = history.map((s) => {
+      const val = s[activeOutcome as keyof typeof s];
+      return typeof val === 'number' ? val : null;
+    });
     const mainBookmaker = history[0]?.bookmaker || 'FlashScore';
 
     const datasets: any[] = [
       {
-        label: `${OUTCOME_LABELS[activeOutcome]} — ${mainBookmaker}`,
+        label: `${outcomeDisplayLabels[activeOutcome]} — ${mainBookmaker}`,
         data: mainData,
         borderColor: color.main,
         backgroundColor: color.bg,
@@ -88,17 +114,18 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
       },
     ];
 
-    // Sharp bookmaker lines (dashed)
-    if (showSharpOdds) {
+    // Sharp bookmaker lines (dashed) — only for football outcomes
+    // Sharp odds use home/draw/away keys even when the main snapshot uses player1/player2
+    if (showSharpOdds && !isTennis) {
       availableSharps.forEach((sharpKey) => {
         const sharpData = history.map(
-          (s) => s.sharp_odds?.[sharpKey]?.[activeOutcome] ?? null
+          (s) => s.sharp_odds?.[sharpKey]?.[activeOutcome as 'home' | 'draw' | 'away'] ?? null
         );
         const hasData = sharpData.some((v) => v !== null);
         if (!hasData) return;
 
         datasets.push({
-          label: `${OUTCOME_LABELS[activeOutcome]} — ${SHARP_BOOKMAKER_LABELS[sharpKey] || sharpKey}`,
+          label: `${outcomeDisplayLabels[activeOutcome]} — ${SHARP_BOOKMAKER_LABELS[sharpKey] || sharpKey}`,
           data: sharpData,
           borderColor: SHARP_COLORS[sharpKey] || 'rgb(156, 163, 175)',
           backgroundColor: 'transparent',
@@ -114,7 +141,7 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
     }
 
     return { labels: timestamps, datasets };
-  }, [history, activeOutcome, showSharpOdds, availableSharps]);
+  }, [history, activeOutcome, showSharpOdds, availableSharps, isTennis, outcomeDisplayLabels]);
 
   const chartOptions = useMemo(
     () => ({
@@ -211,7 +238,12 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
 
   // Compute summary stats for the active outcome
   const stats = useMemo(() => {
-    const values = history.map((s) => s[activeOutcome]).filter((v): v is number => v != null);
+    const values = history
+      .map((s) => {
+        const val = s[activeOutcome as keyof typeof s];
+        return typeof val === 'number' ? val : null;
+      })
+      .filter((v): v is number => v != null);
     if (!values.length) return null;
     const current = values[values.length - 1];
     const opening = values[0];
@@ -233,9 +265,9 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
     <div className="space-y-5">
       {/* Outcome toggle tabs */}
       <div className="flex flex-wrap items-center gap-2">
-        {(['home', 'draw', 'away'] as OutcomeKey[]).map((key) => {
+        {outcomes.map((key) => {
           const isActive = activeOutcome === key;
-          const color = OUTCOME_COLORS[key];
+          const color = OUTCOME_COLORS[key] || OUTCOME_COLORS.home;
           return (
             <button
               key={key}
@@ -249,12 +281,12 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
               `}
               style={isActive ? { backgroundColor: color.main } : undefined}
             >
-              {OUTCOME_LABELS[key]}
+              {outcomeDisplayLabels[key]}
             </button>
           );
         })}
 
-        {availableSharps.length > 0 && (
+        {availableSharps.length > 0 && !isTennis && (
           <label className="ml-auto flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -269,7 +301,7 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
 
       {/* Stats row */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className={`grid grid-cols-2 ${isTennis ? 'sm:grid-cols-4' : 'sm:grid-cols-4'} gap-3`}>
           <StatCard label="Current" value={stats.current.toFixed(2)} />
           <StatCard label="Opening" value={stats.opening.toFixed(2)} />
           <StatCard
@@ -294,8 +326,8 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
         </div>
       </div>
 
-      {/* Sharp odds info callout */}
-      {availableSharps.length > 0 && showSharpOdds && (
+      {/* Sharp odds info callout — only for football */}
+      {availableSharps.length > 0 && showSharpOdds && !isTennis && (
         <div className="flex items-start gap-3 p-4 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800/30 rounded-lg text-sm text-indigo-700 dark:text-indigo-300">
           <svg className="w-5 h-5 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
