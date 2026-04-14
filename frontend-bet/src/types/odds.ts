@@ -56,12 +56,19 @@ export interface AllMatchesResponse {
   count: number;
 }
 
-export type OutcomeKey = 'home' | 'draw' | 'away';
+export type FootballOutcomeKey = 'home' | 'draw' | 'away';
+export type TennisOutcomeKey = 'player1' | 'player2';
+export type OutcomeKey = FootballOutcomeKey | TennisOutcomeKey;
+
+export const FOOTBALL_OUTCOMES: FootballOutcomeKey[] = ['home', 'draw', 'away'];
+export const TENNIS_OUTCOMES: TennisOutcomeKey[] = ['player1', 'player2'];
 
 export const OUTCOME_LABELS: Record<OutcomeKey, string> = {
   home: 'Home',
   draw: 'Draw',
   away: 'Away',
+  player1: 'Player 1',
+  player2: 'Player 2',
 };
 
 export const SHARP_BOOKMAKER_LABELS: Record<string, string> = {
