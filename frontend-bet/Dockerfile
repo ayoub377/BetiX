@@ -29,7 +29,8 @@ ENV NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=$NEXT_PUBLIC_FIREBASE_MESSAGING_SEN
 ENV NEXT_PUBLIC_FIREBASE_APP_ID=$NEXT_PUBLIC_FIREBASE_APP_ID
 ENV NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=$NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
 
-RUN mkdir -p public && npm run build
+# Ensure public/ exists (even if empty in git) so COPY in runner stage works
+RUN mkdir -p public && touch public/.gitkeep && npm run build
 
 # ── Stage 3: Production runner ───────────────────────────
 FROM node:20-alpine AS runner
