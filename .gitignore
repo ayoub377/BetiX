@@ -20,6 +20,7 @@ __pycache__/
 scraper_outputs/
 trained_models/
 *.png
+!frontend-bet/public/**/*.png
 transfermarkt-api/service-account.json
 # IDE
 .idea/
