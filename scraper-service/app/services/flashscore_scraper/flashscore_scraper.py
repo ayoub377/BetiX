@@ -59,6 +59,7 @@ class FlashScoreScraper:
         self.options.add_argument('--disable-dev-shm-usage')
         self.options.add_argument('--disable-gpu')
         self.options.add_argument('--disable-setuid-sandbox')
+        self.options.add_argument('--no-zygote')           # avoids forking helper processes that leak on crash
         self.options.add_argument('--crash-dumps-dir=/tmp/chrome-crashes')
         self.options.add_argument('--remote-debugging-port=0')
         self.options.add_argument('--disable-extensions')
