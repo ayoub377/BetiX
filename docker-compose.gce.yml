@@ -48,6 +48,8 @@ services:
     ports:
       - "9001:9001"
     restart: unless-stopped
+    init: true          # tini as PID 1 — reaps zombie Chrome processes
+    shm_size: 256m      # Chrome needs more than the default 64MB /dev/shm
     environment:
       - SCRAPER_API_KEY=${SCRAPER_API_KEY:-changeme}
     healthcheck:
