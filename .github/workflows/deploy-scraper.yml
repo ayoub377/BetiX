@@ -1,0 +1,77 @@
+name: Deploy Scraper Service to GCE
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "scraper-service/**"
+      - "docker-compose.gce.yml"
+      - ".github/workflows/deploy-scraper.yml"
+
+concurrency:
+  group: deploy-scraper-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. GCP Auth via Workload Identity Federation ────────
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # ── 3. Setup gcloud CLI ────────────────────────────────
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── 4. Copy files to GCE VM ────────────────────────────
+      - name: Copy scraper-service to VM
+        run: |
+          gcloud compute scp --recurse \
+            scraper-service \
+            docker-compose.gce.yml \
+            ${{ secrets.GCE_VM_NAME }}:~ \
+            --zone=${{ secrets.GCE_VM_ZONE }} \
+            --quiet
+
+      # ── 5. Rebuild & restart scraper container ─────────────
+      - name: Deploy scraper on VM
+        run: |
+          gcloud compute ssh ${{ secrets.GCE_VM_NAME }} \
+            --zone=${{ secrets.GCE_VM_ZONE }} \
+            --quiet \
+            --command="
+              cd ~ &&
+              docker compose -f docker-compose.gce.yml up -d --build scraper
+            "
+
+      # ── 6. Verify health ───────────────────────────────────
+      - name: Verify scraper health
+        run: |
+          gcloud compute ssh ${{ secrets.GCE_VM_NAME }} \
+            --zone=${{ secrets.GCE_VM_ZONE }} \
+            --quiet \
+            --command="
+              echo 'Waiting for scraper to be healthy...' &&
+              for i in \$(seq 1 12); do
+                STATUS=\$(docker inspect --format='{{.State.Health.Status}}' scraper-service 2>/dev/null || echo 'unknown')
+                echo \"Attempt \$i: \$STATUS\"
+                if [ \"\$STATUS\" = 'healthy' ]; then
+                  echo 'Scraper is healthy!'
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo 'Scraper did not become healthy in time'
+              docker logs scraper-service --tail=50
+              exit 1
+            "
