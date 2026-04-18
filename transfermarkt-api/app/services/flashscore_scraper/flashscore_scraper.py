@@ -49,6 +49,18 @@ class FlashScoreScraper:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("Initializing FlashScoreScraper...")
         self.BASE_URL = "https://www.flashscore.com/"
+
+        # ── Hard-guarantee UTC for this Python process (and therefore for
+        # the ChromeDriver child process it spawns). ChromeDriver inherits
+        # the parent process env, so setting TZ=UTC here ensures Chrome
+        # starts in UTC regardless of host OS timezone. This is our first
+        # line of defense — CDP `setTimezoneOverride` is the second.
+        os.environ["TZ"] = "UTC"
+        try:
+            time.tzset()  # POSIX only; safe on Linux containers
+        except AttributeError:
+            pass  # Windows dev — tzset not available
+
         self.options = Options()
         # Point to Debian's chromium binary (not google-chrome)
         chrome_bin = os.environ.get("CHROME_BIN")
@@ -65,6 +77,8 @@ class FlashScoreScraper:
         self.options.add_argument('--disable-background-networking')
         self.options.add_argument("--disable-images")
         self.options.add_argument("--blink-settings=imagesEnabled=false")
+        # Pin locale so FlashScore's time format stays deterministic ("18.04.2026 18:45")
+        self.options.add_argument("--lang=en-US")
         # Persistence settings
         self.persist_outputs = persist_outputs
         self.output_dir = Path("scraper_outputs") if self.persist_outputs else None
@@ -92,12 +106,51 @@ class FlashScoreScraper:
         else:
             driver = webdriver.Chrome(options=self.options)
         # Force UTC timezone so FlashScore renders all times in UTC,
-        # regardless of the server's local timezone.
+        # regardless of the server's local timezone. We apply this twice:
+        # once here (for early navigations) and once again in
+        # `_force_utc_timezone` after each `driver.get(...)` because some
+        # CDP overrides don't propagate to already-loaded frames.
+        self._force_utc_timezone(driver)
+        return driver
+
+    def _force_utc_timezone(self, driver) -> None:
+        """Apply CDP Emulation.setTimezoneOverride to UTC. Idempotent.
+
+        Call once after driver creation and again after each page load.
+        Safe to call repeatedly; CDP treats subsequent calls as updates.
+        """
         try:
             driver.execute_cdp_cmd('Emulation.setTimezoneOverride', {'timezoneId': 'UTC'})
         except Exception as e:
             self.logger.warning("Could not set Chrome timezone to UTC: %s", e)
-        return driver
+
+    def _verify_browser_is_utc(self, driver) -> tuple[str, int]:
+        """Probe the page for the browser's currently-effective timezone.
+
+        Returns (tz_name, offset_minutes). Logs a WARNING if the browser is
+        not running in UTC, so we can alert in production that CDP override
+        failed. Offset follows JS convention: ``UTC = local + offset``.
+        """
+        try:
+            tz_name = driver.execute_script(
+                "return Intl.DateTimeFormat().resolvedOptions().timeZone;"
+            ) or "unknown"
+            offset = int(driver.execute_script("return new Date().getTimezoneOffset();"))
+        except Exception as e:
+            self.logger.warning("Could not probe browser timezone: %s", e)
+            return ("unknown", 0)
+
+        if tz_name != "UTC" or offset != 0:
+            self.logger.warning(
+                "Chrome is NOT running in UTC (tz=%s, offset=%s min). "
+                "CDP setTimezoneOverride likely failed silently. "
+                "Offset-based conversion will still correct the stored time, "
+                "but consider investigating the GCE VM's TZ env var.",
+                tz_name, offset,
+            )
+        else:
+            self.logger.debug("Browser timezone verified: UTC (offset=0).")
+        return (tz_name, offset)
 
     def _navigate_to_lineups(self, driver, wait, match_id):
         """Navigate to the lineups tab. Raises on failure."""
@@ -935,18 +988,23 @@ class FlashScoreScraper:
     def _detect_browser_tz_offset(self, driver) -> int:
         """
         Ask the currently-loaded page what timezone Chrome is actually
-        using, via ``new Date().getTimezoneOffset()``.
+        using. This is our last-line-of-defense for time correctness:
+        even if CDP `setTimezoneOverride` silently fails and TZ=UTC env
+        is missing, FlashScore's rendered time + this offset = correct UTC.
+
+        Also re-applies the UTC CDP override — some Chrome builds require
+        a second apply after the page's Document is loaded.
 
         Returns the offset in minutes such that ``UTC = local + offset``
-        (JS convention — positive = west of UTC). Returns 0 on any
-        failure, which is equivalent to assuming the time is already UTC.
+        (JS convention — positive = west of UTC). Returns 0 on failure
+        (equivalent to assuming the raw time is already UTC).
         """
-        try:
-            offset = driver.execute_script("return new Date().getTimezoneOffset();")
-            return int(offset)
-        except Exception as e:
-            self.logger.warning("Could not detect browser tz offset (assuming UTC): %s", e)
-            return 0
+        # Belt-and-suspenders: re-apply the override now that a real page
+        # is loaded, then probe to see whether it actually took effect.
+        self._force_utc_timezone(driver)
+        tz_name, offset = self._verify_browser_is_utc(driver)
+        self.logger.info("Browser timezone at scrape: tz=%s, offset=%s min", tz_name, offset)
+        return offset
 
     def _parse_flashscore_datetime(
         self,
@@ -983,6 +1041,27 @@ class FlashScoreScraper:
             local_dt = datetime(year, month, day, hour, minute)
             return (local_dt + timedelta(minutes=tz_offset_minutes)).replace(tzinfo=timezone.utc)
 
+        def _sanity_check(utc_dt: datetime, label: str) -> None:
+            """Warn if the parsed UTC time is absurdly far from now.
+
+            Classic tz-drift symptom: a future match parsed as already
+            completed (many hours in the past) or scheduled days in the
+            future. Not a hard error — just a loud signal in logs.
+            """
+            delta = utc_dt - now
+            hours = delta.total_seconds() / 3600.0
+            if hours < -12:
+                self.logger.warning(
+                    "Parsed start time %s is %.1fh in the past for match %s (raw=%r, tz_offset=%s). "
+                    "This likely means Chrome's timezone drifted and the offset correction is wrong.",
+                    utc_dt.isoformat(), hours, match_id, raw, tz_offset_minutes,
+                )
+            elif hours > 24 * 14:
+                self.logger.warning(
+                    "Parsed start time %s is %.1f days in the future for match %s (raw=%r). Suspicious.",
+                    utc_dt.isoformat(), hours / 24, match_id, raw,
+                )
+
         # Pattern 1: "26.02.2026 21:00" — full date with year
         match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})", raw)
         if match:
@@ -990,6 +1069,7 @@ class FlashScoreScraper:
             utc_dt = _to_utc(year, month, day, hour, minute)
             utc_iso = utc_dt.isoformat()
             self.logger.info("Parsed start time (full): %s → %s (tz_offset=%s)", raw, utc_iso, tz_offset_minutes)
+            _sanity_check(utc_dt, "full")
             return utc_iso
 
         # Pattern 2: "26.02. 21:00" — no year, assume current year
@@ -1003,6 +1083,7 @@ class FlashScoreScraper:
                 utc_dt = _to_utc(year + 1, month, day, hour, minute)
             utc_iso = utc_dt.isoformat()
             self.logger.info("Parsed start time (no year): %s → %s (tz_offset=%s)", raw, utc_iso, tz_offset_minutes)
+            _sanity_check(utc_dt, "no-year")
             return utc_iso
 
         # Pattern 3: "21:00" — time only, assume today
@@ -1012,6 +1093,7 @@ class FlashScoreScraper:
             utc_dt = _to_utc(now.year, now.month, now.day, hour, minute)
             utc_iso = utc_dt.isoformat()
             self.logger.info("Parsed start time (time only): %s → %s (tz_offset=%s)", raw, utc_iso, tz_offset_minutes)
+            _sanity_check(utc_dt, "time-only")
             return utc_iso
 
         self.logger.warning("Could not parse start time '%s' for match %s", raw, match_id)
