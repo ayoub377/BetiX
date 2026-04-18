@@ -12,6 +12,13 @@ concurrency:
   group: deploy-scraper-${{ github.ref }}
   cancel-in-progress: true
 
+# Required for google-github-actions/auth (Workload Identity Federation).
+# Without `id-token: write`, GitHub will not inject the OIDC token env vars
+# and the auth step fails with "did not inject $ACTIONS_ID_TOKEN_REQUEST_TOKEN".
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
