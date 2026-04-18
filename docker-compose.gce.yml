@@ -52,6 +52,10 @@ services:
     shm_size: 256m      # Chrome needs more than the default 64MB /dev/shm
     environment:
       - SCRAPER_API_KEY=${SCRAPER_API_KEY:-changeme}
+      # Force UTC so Chrome renders FlashScore match times in UTC
+      # regardless of the GCE VM's host timezone. See scraper-service
+      # flashscore_scraper.py for the in-process CDP override.
+      - TZ=UTC
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9001/health"]
       interval: 30s
