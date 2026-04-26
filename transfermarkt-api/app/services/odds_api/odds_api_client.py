@@ -134,11 +134,13 @@ def find_event(
     away_team: str,
     sport_key: Optional[str] = None,
     sport: str = "football",
-) -> Optional[tuple[str, str]]:
+) -> Optional[tuple[str, str, Optional[str]]]:
     """
     Search The Odds API events for a match matching the given team/player names.
 
-    Returns (event_id, sport_key) or None if no match found.
+    Returns (event_id, sport_key, commence_time_iso) or None if no match found.
+    ``commence_time_iso`` is the event's UTC ISO 8601 kickoff string from
+    The Odds API (e.g. ``"2026-04-26T19:00:00Z"``); may be None if absent.
 
     - sport_key accepts aliases ('champions_league', 'la_liga', 'atp') or
       raw Odds API keys ('soccer_epl'). See SPORT_KEY_ALIASES.
@@ -178,11 +180,12 @@ def find_event(
                 api_away = event.get("away_team", "")
                 if _teams_match(api_home, api_away, home_team, away_team):
                     event_id = event["id"]
+                    commence_time = event.get("commence_time")
                     logger.info(
-                        "Matched '%s vs %s' → event %s in %s",
-                        home_team, away_team, event_id, sk,
+                        "Matched '%s vs %s' → event %s in %s (commence_time=%s)",
+                        home_team, away_team, event_id, sk, commence_time,
                     )
-                    return event_id, sk
+                    return event_id, sk, commence_time
 
             # Pass 2: single-team match — if exactly one event matches
             # either team name, use it (handles abbreviations like PSG)
@@ -198,12 +201,13 @@ def find_event(
             if len(single_matches) == 1:
                 event = single_matches[0]
                 event_id = event["id"]
+                commence_time = event.get("commence_time")
                 logger.info(
-                    "Single-team matched '%s vs %s' → event %s (%s vs %s) in %s",
+                    "Single-team matched '%s vs %s' → event %s (%s vs %s) in %s (commence_time=%s)",
                     home_team, away_team, event_id,
-                    event.get("home_team"), event.get("away_team"), sk,
+                    event.get("home_team"), event.get("away_team"), sk, commence_time,
                 )
-                return event_id, sk
+                return event_id, sk, commence_time
 
             # Pass 3: surname match — handles FlashScore 'Kouame M.' vs
             # Odds API 'Maxime Kouame' by comparing extracted surnames
@@ -218,12 +222,13 @@ def find_event(
             if len(surname_matches) == 1:
                 event = surname_matches[0]
                 event_id = event["id"]
+                commence_time = event.get("commence_time")
                 logger.info(
-                    "Surname matched '%s vs %s' → event %s (%s vs %s) in %s",
+                    "Surname matched '%s vs %s' → event %s (%s vs %s) in %s (commence_time=%s)",
                     home_team, away_team, event_id,
-                    event.get("home_team"), event.get("away_team"), sk,
+                    event.get("home_team"), event.get("away_team"), sk, commence_time,
                 )
-                return event_id, sk
+                return event_id, sk, commence_time
 
         except Exception as e:
             logger.warning("Error searching events in %s: %s", sk, e)
@@ -289,6 +294,38 @@ def extract_sharp_odds_from_event(
                 result[bm_key] = odds_map
 
     return result
+
+
+def get_event_commence_time(
+    api_key: str,
+    sport_key: str,
+    event_id: str,
+) -> Optional[str]:
+    """Fetch the latest ``commence_time`` for an Odds API event.
+
+    Used to refresh stored kickoff times so postponements/delays propagate.
+    Returns the UTC ISO 8601 string from the events list endpoint, or None
+    on any error / missing event.
+    """
+    try:
+        url = f"{BASE_URL}/sports/{sport_key}/events"
+        resp = httpx.get(url, params={"apiKey": api_key}, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(
+                "Odds API events returned %s when refreshing commence_time for %s/%s",
+                resp.status_code, sport_key, event_id,
+            )
+            return None
+        events = resp.json()
+        if not isinstance(events, list):
+            return None
+        for event in events:
+            if event.get("id") == event_id:
+                return event.get("commence_time")
+        return None
+    except Exception as e:
+        logger.warning("Failed to refresh commence_time for %s/%s: %s", sport_key, event_id, e)
+        return None
 
 
 def fetch_sharp_odds(

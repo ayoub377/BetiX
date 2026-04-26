@@ -43,27 +43,48 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
 
         meta = await get_match_meta(redis_client, match_id)
 
-        # ── Refresh start time from FlashScore ──────────────────────
+        # ── Refresh start time ──────────────────────────────────────
         # Tennis matches (and some football) can have their start time
         # pushed back (e.g. previous match still in progress).  We
-        # re-scrape the start time on every cycle so the tracker
+        # re-fetch the start time on every cycle so the tracker
         # doesn't stop too early based on a stale timestamp.
+        #
+        # Source precedence:
+        #   1. Odds API commence_time (when the match has been mapped) —
+        #      authoritative UTC ISO from a real API; not affected by
+        #      FlashScore's IP-geolocated rendering.
+        #   2. FlashScore re-scrape — fallback for matches not on Odds API.
         try:
             loop_st = asyncio.get_event_loop()
-            fresh_info = await loop_st.run_in_executor(
-                io_executor, scraper.get_match_info, match_id
-            )
-            fresh_start = fresh_info.get("start_time") if fresh_info else None
+            fresh_start = None
+            fresh_raw = None
+            api_key = os.environ.get("ODDS_API_KEY")
+            event_id = meta.get("odds_api_event_id") if meta else None
+            sport_key_meta = meta.get("odds_api_sport_key") if meta else None
+
+            if api_key and event_id and sport_key_meta:
+                from app.services.odds_api.odds_api_client import get_event_commence_time
+                fresh_start = await loop_st.run_in_executor(
+                    io_executor, get_event_commence_time,
+                    api_key, sport_key_meta, event_id,
+                )
+            else:
+                fresh_info = await loop_st.run_in_executor(
+                    io_executor, scraper.get_match_info, match_id
+                )
+                fresh_start = fresh_info.get("start_time") if fresh_info else None
+                fresh_raw = fresh_info.get("start_time_raw") if fresh_info else None
+
             if fresh_start and meta:
                 old_start = meta.get("start_time")
                 if fresh_start != old_start:
-                    fresh_raw = fresh_info.get("start_time_raw")
                     logger.info(
                         "Match %s start time changed: %s → %s",
                         match_id, old_start, fresh_start,
                     )
                     await update_match_meta_field(redis_client, match_id, "start_time", fresh_start)
-                    await update_match_meta_field(redis_client, match_id, "start_time_raw", fresh_raw)
+                    if fresh_raw is not None:
+                        await update_match_meta_field(redis_client, match_id, "start_time_raw", fresh_raw)
                     meta["start_time"] = fresh_start
                     # Keep PostgreSQL in sync with Redis — persist_match()
                     # is insert-only, so without this the DB row stays stale.

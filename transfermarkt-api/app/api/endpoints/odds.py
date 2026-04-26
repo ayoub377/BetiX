@@ -225,13 +225,35 @@ async def track_match(body: TrackRequest, redis_client=Depends(get_redis)):
                 body.sport_key, sport.value,
             )
             if result:
-                meta["odds_api_event_id"] = result[0]
-                meta["odds_api_sport_key"] = result[1]
-                logger.info("Step 5: Mapped to Odds API event %s (%s)", result[0], result[1])
+                event_id, sport_key_resolved, commence_time = result
+                meta["odds_api_event_id"] = event_id
+                meta["odds_api_sport_key"] = sport_key_resolved
+                if commence_time:
+                    # The Odds API returns proper UTC ISO 8601 (e.g. "2026-04-26T19:00:00Z").
+                    # Prefer it over the FlashScore-scraped time, which can drift by
+                    # the GCE VM's IP-geolocated tz (CEST → +2h skew).
+                    fs_start = meta.get("start_time")
+                    meta["start_time"] = commence_time
+                    meta["start_time_source"] = "odds_api"
+                    if fs_start and fs_start != commence_time:
+                        logger.info(
+                            "Step 5: Overrode FlashScore start_time %s with Odds API commence_time %s",
+                            fs_start, commence_time,
+                        )
+                else:
+                    meta["start_time_source"] = "flashscore"
+                logger.info(
+                    "Step 5: Mapped to Odds API event %s (%s) commence_time=%s",
+                    event_id, sport_key_resolved, commence_time,
+                )
             else:
+                meta["start_time_source"] = "flashscore"
                 logger.info("Step 5: No matching Odds API event found.")
         except Exception as e:
+            meta["start_time_source"] = "flashscore"
             logger.warning("Step 5: Odds API lookup failed: %s", e)
+    else:
+        meta["start_time_source"] = "flashscore"
 
     await register_match(redis_client, match_id, meta)
     logger.info("Step 5 complete: meta stored.")
