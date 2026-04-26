@@ -268,9 +268,10 @@ class TestFindEvent:
 
         result = find_event("fake_key", "Manchester United", "Liverpool", sport_key="soccer_epl")
         assert result is not None
-        event_id, sport_key = result
+        event_id, sport_key, commence_time = result
         assert event_id == "event_001"
         assert sport_key == "soccer_epl"
+        assert commence_time == "2026-03-10T20:00:00Z"
 
     @patch("app.services.odds_api.odds_api_client.httpx")
     def test_finds_fuzzy_match(self, mock_httpx):
@@ -432,7 +433,7 @@ class TestTennisFindEvent:
             sport_key="tennis_wta_miami_open", sport="tennis",
         )
         assert result is not None
-        event_id, sport_key = result
+        event_id, sport_key, _commence = result
         assert event_id == "tennis_event_001"
         assert sport_key == "tennis_wta_miami_open"
 
@@ -459,9 +460,10 @@ class TestTennisFindEvent:
             sport_key="tennis_atp_monte_carlo_masters", sport="tennis",
         )
         assert result is not None
-        event_id, sport_key = result
+        event_id, sport_key, commence = result
         assert event_id == "tennis_monte_carlo_001"
         assert sport_key == "tennis_atp_monte_carlo_masters"
+        assert commence == "2026-04-05T14:00:00Z"
 
     @patch("app.services.odds_api.odds_api_client.httpx")
     def test_soccer_still_uses_soccer_keys(self, mock_httpx):

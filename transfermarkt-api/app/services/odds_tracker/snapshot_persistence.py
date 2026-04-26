@@ -72,11 +72,17 @@ def update_match_start_time(
     start_time: Optional[str],
     start_time_raw: Optional[str],
 ):
-    """Update the start_time / start_time_raw fields of a tracked match."""
+    """Update the start_time / start_time_raw fields of a tracked match.
+
+    ``start_time_raw`` is preserved when None is passed — Odds API refreshes
+    don't have a "raw" representation, but we still want to keep whichever
+    raw FlashScore string was last captured for debugging.
+    """
     row = session.query(TrackedMatch).filter_by(match_id=match_id).first()
     if row:
         row.start_time = start_time
-        row.start_time_raw = start_time_raw
+        if start_time_raw is not None:
+            row.start_time_raw = start_time_raw
         session.commit()
         logger.info("Updated match %s start_time to '%s'.", match_id, start_time)
 

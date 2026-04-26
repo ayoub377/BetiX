@@ -111,7 +111,47 @@ class FlashScoreScraper:
         # `_force_utc_timezone` after each `driver.get(...)` because some
         # CDP overrides don't propagate to already-loaded frames.
         self._force_utc_timezone(driver)
+        # FlashScore can also render kickoff in the user's IP-geolocated tz
+        # (server-side), independent of Chrome's reported tz. Pin its own
+        # preference cookies to UTC so the rendered HH:MM matches what we
+        # treat as UTC. Cookies require a prior page load on the same domain.
+        self._pin_flashscore_timezone_cookie(driver)
         return driver
+
+    def _pin_flashscore_timezone_cookie(self, driver) -> None:
+        """Pin FlashScore's per-user timezone preference to UTC.
+
+        FlashScore decides which timezone to render kickoff times in based
+        on a combination of: (a) the JS Date timezone of the page, (b) the
+        client IP's geolocation, and (c) a user preference cookie set by
+        their settings UI. Chrome's CDP `setTimezoneOverride` only fixes
+        (a). Setting the cookie here neutralizes (c) and reduces the
+        chance that (b) wins (FlashScore tends to honor an explicit
+        preference cookie over geo).
+
+        Cookies require a prior page load on the same eTLD+1, so we
+        navigate to the site root once, write the cookies, and let the
+        next `driver.get(match_url)` use them.
+        """
+        try:
+            driver.get(self.BASE_URL)
+            for name in ("user_tz_offset", "tz_offset", "userTimezoneOffset"):
+                try:
+                    driver.add_cookie({
+                        "name": name,
+                        "value": "0",
+                        "domain": ".flashscore.com",
+                        "path": "/",
+                    })
+                except Exception:
+                    # Cookie API rejects domains for some Selenium builds; retry without
+                    try:
+                        driver.add_cookie({"name": name, "value": "0", "path": "/"})
+                    except Exception:
+                        pass
+            self.logger.debug("Pinned FlashScore timezone cookies to UTC offset=0.")
+        except Exception as e:
+            self.logger.warning("Could not pin FlashScore timezone cookies: %s", e)
 
     def _force_utc_timezone(self, driver) -> None:
         """Apply CDP Emulation.setTimezoneOverride to UTC. Idempotent.
