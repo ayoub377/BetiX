@@ -79,6 +79,37 @@ async def lifespan(app_: FastAPI):
                     sport=sport_str,
                 )
 
+    # 3b. Recover Pending Result-Polling Jobs
+    try:
+        from datetime import datetime, timezone, timedelta
+        from app.models.database import SessionLocal
+        from app.services.odds_tracker.snapshot_persistence import (
+            get_pending_result_match_ids, get_match_meta_from_db,
+        )
+        from app.services.odds_tracker.result_scheduler import schedule_result_polling
+
+        session = SessionLocal()
+        try:
+            pending_ids = get_pending_result_match_ids(session)
+            if pending_ids:
+                logger.info("Resuming %d pending result-polling jobs...", len(pending_ids))
+            for j, match_id in enumerate(pending_ids):
+                match_meta = get_match_meta_from_db(session, match_id)
+                if not match_meta:
+                    continue
+                # Stagger so we don't hit the Odds API in lockstep on boot.
+                first_run = datetime.now(timezone.utc) + timedelta(seconds=j * 1.5)
+                schedule_result_polling(
+                    match_id,
+                    sport=match_meta.get("sport", "football"),
+                    odds_api_event_id=match_meta.get("odds_api_event_id"),
+                    first_run_at=first_run,
+                )
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("Failed to recover result-polling jobs: %s", e)
+
     yield
 
     # 4. Shutdown
