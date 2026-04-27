@@ -8,7 +8,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models.odds_models import TrackedMatch, OddsSnapshot
+from app.models.odds_models import TrackedMatch, OddsSnapshot, MatchResult
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,134 @@ def get_all_matches_from_db(session: Session) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def _outcome_for_scores(
+    sport: str,
+    home_score: Optional[int],
+    away_score: Optional[int],
+) -> Optional[str]:
+    """Derive 1X2 outcome label from scores. None when scores are missing."""
+    if home_score is None or away_score is None:
+        return None
+    if sport == "tennis":
+        return "p1" if home_score > away_score else "p2"
+    if home_score > away_score:
+        return "home"
+    if home_score < away_score:
+        return "away"
+    return "draw"
+
+
+def upsert_match_result(
+    session: Session,
+    match_id: str,
+    sport: str,
+    completed: bool = False,
+) -> MatchResult:
+    """Insert a pending result row if one doesn't already exist; return it.
+
+    Idempotent — safe to call from both the kickoff hook and the polling
+    job's first iteration.
+    """
+    row = session.query(MatchResult).filter_by(match_id=match_id).first()
+    if row:
+        return row
+    row = MatchResult(
+        match_id=match_id,
+        sport=sport or "football",
+        completed=completed,
+        poll_attempts=0,
+    )
+    session.add(row)
+    session.commit()
+    logger.info("Created pending match_result row for %s.", match_id)
+    return row
+
+
+def mark_result_completed(
+    session: Session,
+    match_id: str,
+    sport: str,
+    home_score: Optional[int],
+    away_score: Optional[int],
+    fetched_at: str,
+    result_source: str = "odds_api",
+) -> None:
+    """Write final scores + outcome to the match_results row."""
+    row = session.query(MatchResult).filter_by(match_id=match_id).first()
+    if not row:
+        row = MatchResult(match_id=match_id, sport=sport or "football")
+        session.add(row)
+
+    row.sport = sport or row.sport or "football"
+    row.home_score = home_score
+    row.away_score = away_score
+    row.outcome = _outcome_for_scores(row.sport, home_score, away_score)
+    row.completed = True
+    row.result_source = result_source
+    row.fetched_at = fetched_at
+    row.last_poll_at = fetched_at
+    session.commit()
+    logger.info(
+        "Recorded final result for %s: %s-%s outcome=%s",
+        match_id, home_score, away_score, row.outcome,
+    )
+
+
+def record_poll_attempt(
+    session: Session,
+    match_id: str,
+    last_poll_at: str,
+) -> int:
+    """Increment poll_attempts on the row, return the new count."""
+    row = session.query(MatchResult).filter_by(match_id=match_id).first()
+    if not row:
+        return 0
+    row.last_poll_at = last_poll_at
+    row.poll_attempts = (row.poll_attempts or 0) + 1
+    session.commit()
+    return row.poll_attempts
+
+
+def mark_result_timeout(session: Session, match_id: str, fetched_at: str) -> None:
+    """Mark a result row as timed-out after exceeding poll budget."""
+    row = session.query(MatchResult).filter_by(match_id=match_id).first()
+    if not row:
+        return
+    row.result_source = "timeout"
+    row.last_poll_at = fetched_at
+    session.commit()
+    logger.info("Marked match_result %s as timeout after %d polls.", match_id, row.poll_attempts)
+
+
+def get_match_result_from_db(session: Session, match_id: str) -> Optional[dict]:
+    """Return the match_results row as a dict, or None if not present."""
+    row = session.query(MatchResult).filter_by(match_id=match_id).first()
+    if not row:
+        return None
+    return {
+        "match_id": row.match_id,
+        "sport": row.sport,
+        "home_score": row.home_score,
+        "away_score": row.away_score,
+        "outcome": row.outcome,
+        "completed": bool(row.completed),
+        "result_source": row.result_source,
+        "fetched_at": row.fetched_at,
+        "last_poll_at": row.last_poll_at,
+        "poll_attempts": row.poll_attempts or 0,
+    }
+
+
+def get_pending_result_match_ids(session: Session) -> list[str]:
+    """Return match_ids of result rows where completed=False — for startup recovery."""
+    rows = (
+        session.query(MatchResult.match_id)
+        .filter(MatchResult.completed.is_(False))
+        .all()
+    )
+    return [r[0] for r in rows]
 
 
 def get_match_meta_from_db(session: Session, match_id: str) -> Optional[dict]:

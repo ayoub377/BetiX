@@ -21,6 +21,7 @@ import {
   SHARP_BOOKMAKER_LABELS,
   FOOTBALL_OUTCOMES,
   TENNIS_OUTCOMES,
+  formatPrimarySource,
 } from '@/types/odds';
 
 ChartJS.register(
@@ -236,21 +237,27 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
     []
   );
 
-  // Compute summary stats for the active outcome
+  // Compute summary stats for the active outcome — uses primary_odds
+  // (Pinnacle when available, FlashScore book otherwise) so the change
+  // indicator reflects the sharp price rather than a soft book.
   const stats = useMemo(() => {
-    const values = history
+    const points = history
       .map((s) => {
-        const val = s[activeOutcome as keyof typeof s];
-        return typeof val === 'number' ? val : null;
+        const val = s.primary_odds?.[activeOutcome];
+        return typeof val === 'number'
+          ? { value: val, source: s.primary_source ?? null }
+          : null;
       })
-      .filter((v): v is number => v != null);
-    if (!values.length) return null;
+      .filter((p): p is { value: number; source: string | null } => p != null);
+    if (!points.length) return null;
+    const values = points.map((p) => p.value);
     const current = values[values.length - 1];
     const opening = values[0];
     const high = Math.max(...values);
     const low = Math.min(...values);
     const movement = current - opening;
-    return { current, opening, high, low, movement };
+    const currentSource = points[points.length - 1].source;
+    return { current, opening, high, low, movement, currentSource };
   }, [history, activeOutcome]);
 
   if (!history.length) {
@@ -302,7 +309,11 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
       {/* Stats row */}
       {stats && (
         <div className={`grid grid-cols-2 ${isTennis ? 'sm:grid-cols-4' : 'sm:grid-cols-4'} gap-3`}>
-          <StatCard label="Current" value={stats.current.toFixed(2)} />
+          <StatCard
+            label="Current"
+            value={stats.current.toFixed(2)}
+            sub={formatPrimarySource(stats.currentSource)}
+          />
           <StatCard label="Opening" value={stats.opening.toFixed(2)} />
           <StatCard
             label="Movement"
@@ -347,10 +358,12 @@ function StatCard({
   label,
   value,
   valueClass,
+  sub,
 }: {
   label: string;
   value: string;
   valueClass?: string;
+  sub?: string;
 }) {
   return (
     <div className="bg-gray-50 dark:bg-slate-700/50 rounded-lg p-3 text-center">
@@ -358,6 +371,11 @@ function StatCard({
       <p className={`text-lg font-semibold ${valueClass || 'text-gray-800 dark:text-gray-100'}`}>
         {value}
       </p>
+      {sub && (
+        <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mt-1">
+          {sub}
+        </p>
+      )}
     </div>
   );
 }

@@ -328,6 +328,84 @@ def get_event_commence_time(
         return None
 
 
+def fetch_event_scores(
+    api_key: str,
+    sport_key: str,
+    event_id: str,
+    home_team: str,
+    away_team: str,
+    days_from: int = 1,
+) -> Optional[dict]:
+    """Fetch the final score for an Odds API event.
+
+    Returns ``{"completed": bool, "home_score": int|None, "away_score": int|None}``
+    or ``None`` if the event isn't in the response (the scores feed is
+    eventually consistent — the event may not appear for a few minutes after
+    full-time).
+
+    The Odds API ``/scores`` endpoint returns a list of events for the sport,
+    each with a ``scores`` array keyed by team name. We map those team-name
+    entries back to home/away using the names stored on the tracked match.
+    """
+    try:
+        url = f"{BASE_URL}/sports/{sport_key}/scores"
+        params = {
+            "apiKey": api_key,
+            "daysFrom": days_from,
+            "eventIds": event_id,
+        }
+        resp = httpx.get(url, params=params, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(
+                "Odds API scores returned %s for %s/%s",
+                resp.status_code, sport_key, event_id,
+            )
+            return None
+
+        events = resp.json()
+        if not isinstance(events, list):
+            return None
+
+        for event in events:
+            if event.get("id") != event_id:
+                continue
+
+            completed = bool(event.get("completed"))
+            scores = event.get("scores") or []
+
+            home_score: Optional[int] = None
+            away_score: Optional[int] = None
+            api_home = event.get("home_team", "")
+            api_away = event.get("away_team", "")
+
+            for entry in scores:
+                name = entry.get("name", "")
+                raw_score = entry.get("score")
+                if raw_score is None or raw_score == "":
+                    continue
+                try:
+                    parsed = int(raw_score)
+                except (TypeError, ValueError):
+                    continue
+                # Match by Odds API team names first (authoritative), then
+                # by the caller-provided names as a fallback.
+                if _name_matches(name, api_home) or _name_matches(name, home_team):
+                    home_score = parsed
+                elif _name_matches(name, api_away) or _name_matches(name, away_team):
+                    away_score = parsed
+
+            return {
+                "completed": completed,
+                "home_score": home_score,
+                "away_score": away_score,
+            }
+
+        return None
+    except Exception as e:
+        logger.warning("Failed to fetch scores for %s/%s: %s", sport_key, event_id, e)
+        return None
+
+
 def fetch_sharp_odds(
     api_key: str,
     sport_key: str,

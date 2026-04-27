@@ -17,6 +17,12 @@ export interface OddsSnapshot {
   player1?: number;
   player2?: number;
   sharp_odds?: Record<string, SharpBookmakerOdds>;
+  // Backend-resolved canonical odds for change indicators.
+  // Pinnacle when available, otherwise the FlashScore bookmaker.
+  primary_source: string | null;
+  primary_odds: Record<string, number> | null;
+  primary_change: Record<string, number> | null;
+  primary_change_pct: Record<string, number> | null;
   seconds_since_last: number;
   display_interval: string;
 }
@@ -76,3 +82,11 @@ export const SHARP_BOOKMAKER_LABELS: Record<string, string> = {
   betfair_ex_eu: 'Betfair Exchange',
   betonlineag: 'BetOnline',
 };
+
+// Display label for the resolved primary source (covers both sharp keys and
+// FlashScore-scraped fallback names like "betclic" / "bet365").
+export function formatPrimarySource(source: string | null | undefined): string {
+  if (!source) return '—';
+  if (SHARP_BOOKMAKER_LABELS[source]) return SHARP_BOOKMAKER_LABELS[source];
+  return source.charAt(0).toUpperCase() + source.slice(1);
+}

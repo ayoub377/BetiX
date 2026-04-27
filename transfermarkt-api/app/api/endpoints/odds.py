@@ -27,11 +27,15 @@ from app.services.odds_tracker.odds_tracker import (
 from app.services.odds_tracker.odds_scheduler import start_tracking_job, scheduler, stop_tracking_job
 from app.core.config import SCRAPE_INTERVAL_SECONDS
 from app.services.odds_tracker.odds_tracker import store_odds_snapshot
+from app.services.odds_tracker.primary_odds import decorate_history, resolve_primary_odds
 from app.models.database import SessionLocal
 from app.services.odds_tracker.snapshot_persistence import (
     get_match_snapshots as db_get_snapshots,
     get_match_meta_from_db,
     get_all_matches_from_db,
+    get_match_result_from_db,
+    upsert_match_result,
+    mark_result_completed,
 )
 
 load_dotenv()
@@ -379,11 +383,12 @@ async def stream_odds_history(
         # --- 1. Send match metadata as first event ---
         yield f"data: {json.dumps({'type': 'meta', 'data': meta})}\n\n"
 
-        # --- 2. Replay full existing history ---
+        # --- 2. Replay full existing history (decorated with primary_odds) ---
         history = await get_odds_history(redis_client, match_id)
-        last_sent_count = len(history)
+        decorated = decorate_history(history)
+        last_sent_count = len(decorated)
 
-        for snapshot in history:
+        for snapshot in decorated:
             yield f"data: {json.dumps({'type': 'snapshot', 'data': snapshot})}\n\n"
 
         yield f"data: {json.dumps({'type': 'history_complete', 'count': last_sent_count})}\n\n"
@@ -401,12 +406,14 @@ async def stream_odds_history(
                 break
 
             history = await get_odds_history(redis_client, match_id)
-            new_snapshots = history[last_sent_count:]
 
-            if new_snapshots:
-                for snapshot in new_snapshots:
+            if len(history) > last_sent_count:
+                # Re-decorate everything so the new tail's change deltas are
+                # computed against the correct previous primary_odds.
+                decorated = decorate_history(history)
+                for snapshot in decorated[last_sent_count:]:
                     yield f"data: {json.dumps({'type': 'snapshot', 'data': snapshot})}\n\n"
-                last_sent_count = len(history)
+                last_sent_count = len(decorated)
             else:
                 # Keepalive so the connection doesn't time out
                 yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
@@ -445,14 +452,15 @@ async def get_match_history_summary(match_id: str, redis_client=Depends(get_redi
     if not meta:
         meta = {}
 
+    decorated_history = decorate_history(history)
     processed_history = []
 
-    for i, snapshot in enumerate(history):
+    for i, snapshot in enumerate(decorated_history):
         current_time = datetime.fromisoformat(snapshot["timestamp"])
 
         # Calculate interval since the previous snapshot
         if i > 0:
-            prev_time = datetime.fromisoformat(history[i - 1]["timestamp"])
+            prev_time = datetime.fromisoformat(decorated_history[i - 1]["timestamp"])
             interval_seconds = (current_time - prev_time).total_seconds()
         else:
             interval_seconds = 0  # First entry has no previous interval
@@ -508,6 +516,102 @@ async def untrack_match(match_id: str, redis_client=Depends(get_redis)):
         "match_id": match_id,
         "status": "untracked",
         "message": f"Match {match_id} removed from tracking. History preserved.",
+    }
+
+
+@router.post("/result/{match_id}/refresh")
+async def refresh_match_result(match_id: str):
+    """Force an immediate Odds API scores fetch for a match.
+
+    Useful after a result poll timed out, or to backfill a result that the
+    scheduler missed (e.g., the server was down during the polling window).
+    """
+    api_key = os.getenv("ODDS_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ODDS_API_KEY not configured.")
+
+    session = SessionLocal()
+    try:
+        match_meta = get_match_meta_from_db(session, match_id)
+    finally:
+        session.close()
+
+    if not match_meta:
+        raise HTTPException(status_code=404, detail=f"Match {match_id} not found.")
+
+    event_id = match_meta.get("odds_api_event_id")
+    sport_key = match_meta.get("odds_api_sport_key")
+    if not event_id or not sport_key:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Match {match_id} has no Odds API mapping; cannot fetch scores.",
+        )
+
+    loop = asyncio.get_event_loop()
+    from app.services.odds_api.odds_api_client import fetch_event_scores
+    scores = await loop.run_in_executor(
+        None, fetch_event_scores, api_key, sport_key, event_id,
+        match_meta.get("home_team", ""), match_meta.get("away_team", ""),
+    )
+
+    when = datetime.now(timezone.utc).isoformat()
+    if scores and scores.get("completed") and scores.get("home_score") is not None:
+        session = SessionLocal()
+        try:
+            mark_result_completed(
+                session, match_id, sport=match_meta.get("sport", "football"),
+                home_score=scores["home_score"], away_score=scores["away_score"],
+                fetched_at=when,
+            )
+            # Stop any still-running polling job — we have the answer.
+            from app.services.odds_tracker.result_scheduler import stop_result_job
+            stop_result_job(match_id)
+            result = get_match_result_from_db(session, match_id)
+        finally:
+            session.close()
+        return {"match_id": match_id, "status": "completed", "result": result}
+
+    return {
+        "match_id": match_id,
+        "status": "pending",
+        "scores_response": scores,
+        "message": "Match not yet completed in Odds API scores feed.",
+    }
+
+
+@router.get("/match/{match_id}/dataset")
+async def get_match_dataset(match_id: str, redis_client=Depends(get_redis)):
+    """Return the structured per-match dataset: meta + snapshots + result.
+
+    Snapshots come from PostgreSQL (or Redis if DB is empty), each enriched
+    with primary_odds/primary_change from the same resolver used elsewhere,
+    so a downstream notebook sees identical fields to the live UI.
+    """
+    session = SessionLocal()
+    try:
+        match_meta = get_match_meta_from_db(session, match_id)
+        if not match_meta:
+            redis_meta = await get_match_meta(redis_client, match_id)
+            if not redis_meta:
+                raise HTTPException(status_code=404, detail=f"Match {match_id} not found.")
+            match_meta = redis_meta
+
+        snapshots = db_get_snapshots(session, match_id)
+        if not snapshots:
+            snapshots = await get_odds_history(redis_client, match_id)
+
+        result = get_match_result_from_db(session, match_id)
+    finally:
+        session.close()
+
+    decorated = decorate_history(snapshots)
+
+    return {
+        "match_id": match_id,
+        "meta": match_meta,
+        "snapshots": decorated,
+        "snapshot_count": len(decorated),
+        "result": result,
     }
 
 

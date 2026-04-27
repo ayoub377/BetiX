@@ -105,6 +105,28 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                     logger.info("Match %s starts in %s — stopping tracker.", match_id, time_until_start)
                     await unregister_match(redis_client, match_id)
                     scheduler.remove_job(job_id(match_id))
+
+                    # Hand off to the post-match result poller. First run is
+                    # delayed to roughly the end of the match so we don't burn
+                    # API quota during play.
+                    try:
+                        from app.services.odds_tracker.result_scheduler import (
+                            schedule_result_polling, RESULT_FIRST_DELAY_SECONDS,
+                        )
+                        first_run = start_time + timedelta(seconds=RESULT_FIRST_DELAY_SECONDS)
+                        if first_run < datetime.now(timezone.utc):
+                            first_run = datetime.now(timezone.utc)
+                        schedule_result_polling(
+                            match_id,
+                            sport=meta.get("sport", "football"),
+                            odds_api_event_id=meta.get("odds_api_event_id"),
+                            first_run_at=first_run,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to schedule result polling for %s: %s",
+                            match_id, e,
+                        )
                     return
 
         try:
