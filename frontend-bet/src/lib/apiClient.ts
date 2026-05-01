@@ -23,6 +23,9 @@ function createApiClient(): AxiosInstance {
 
 export const apiClient = createApiClient();
 
-export function isApiError(err: unknown): err is AxiosError {
+// Use AxiosError<any> so consumers can read `err.response?.data.detail` etc.
+// without an extra cast. Tighten on a per-call basis when the response shape
+// is known (e.g. AxiosError<{ detail: string }>).
+export function isApiError(err: unknown): err is AxiosError<any> {
   return axios.isAxiosError(err);
 }
