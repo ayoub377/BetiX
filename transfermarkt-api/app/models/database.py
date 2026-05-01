@@ -28,6 +28,7 @@ def init_db():
     """Create all tables that don't exist yet. Safe to call multiple times."""
     from app.models.team import Base  # noqa: F811 — Base registers all models
     import app.models.odds_models  # noqa: F401 — register OddsSnapshot/TrackedMatch
+    import app.models.users  # noqa: F401 — register User
 
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables ensured (url=%s).", DATABASE_URL.split("@")[-1])

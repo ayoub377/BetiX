@@ -19,8 +19,8 @@ import {
 import LogoutButton from "@/components/ui/LogoutButton"; // Assuming this is your reusable logout button
 import { useAuth } from '@/contexts/AuthContext'; // Import your AuthContext hook
 
-// This constant should ideally be shared with AuthContext or come from a config
-const DAILY_NORMAL_USER_MAX_REQUESTS = 5;
+// Fallback only — real limit comes from `quotas.daily_compare_limit` returned by /api/users/me.
+const FALLBACK_NORMAL_LIMIT = 5;
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -103,7 +103,10 @@ export default function DashboardPage() {
   }
 
   // At this point, firebaseUser exists. We can use customUserProfile if available, or fallback to firebaseUser info.
+  const userRole = customUserProfile?.role ?? 'normal';
   const isUserPremium = customUserProfile?.isPremiumMember || false;
+  const isUserAdmin = userRole === 'admin';
+  const dailyLimit = customUserProfile?.quotas.daily_compare_limit ?? FALLBACK_NORMAL_LIMIT;
   const currentRequestsLeft = customUserProfile ? requestsLeftToday : 0; // Use requestsLeftToday from context
   const userDisplayName = customUserProfile?.displayName || firebaseUser.displayName || "User";
   // const userEmail = customUserProfile?.email || firebaseUser.email;
@@ -149,15 +152,17 @@ export default function DashboardPage() {
               )}
               <div>
                 <h2 className="text-xl font-semibold text-gray-800 dark:text-white">
-                  {isUserPremium ? 'Premium Account' : 'Standard Account'}
+                  {isUserAdmin ? 'Admin Account' : isUserPremium ? 'Premium Account' : 'Standard Account'}
                 </h2>
                 {isUserPremium ? (
-                  <p className="text-sm text-green-700 dark:text-green-300">Enjoy unlimited analysis requests!</p>
+                  <p className="text-sm text-green-700 dark:text-green-300">
+                    {isUserAdmin ? 'Full admin access — all features unlocked.' : 'Enjoy expanded analysis requests and tracking.'}
+                  </p>
                 ) : (
                   customUserProfile && ( // Ensure profile is loaded before displaying request info
                     <>
                       <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                        Daily Analysis Requests: <span className="font-bold">{currentRequestsLeft < 0 ? 0 : currentRequestsLeft} / {DAILY_NORMAL_USER_MAX_REQUESTS}</span> left.
+                        Daily Analysis Requests: <span className="font-bold">{currentRequestsLeft < 0 ? 0 : currentRequestsLeft} / {dailyLimit}</span> left.
                       </p>
                       {nextQuotaResetTimeDisplay && (
                         <p className="text-xs text-yellow-600 dark:text-yellow-200 mt-1">

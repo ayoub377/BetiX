@@ -11,7 +11,9 @@ from enum import Enum
 from fastapi import APIRouter, Query, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.auth import get_current_user
 from app.core.shared_dependencies import get_configured_api_key
+from app.models.users import User
 
 # Attempt to import tqdm, but make it optional
 try:
@@ -298,6 +300,7 @@ class RegionModel(str, Enum):
 )
 async def find_arbitrage_endpoint(
         api_key: str = Depends(get_configured_api_key),
+        user: User = Depends(get_current_user),
         region: RegionModel = Query(RegionModel.eu, description="The region to search for odds (eu, us, au, uk)."),
         cutoff: float = Query(0.0, ge=0.0, lt=1.0,
                               description="Minimum profit margin cutoff (e.g., 0.01 for 1%). Opportunities with implied odds < (1 - cutoff) will be returned."),
@@ -371,7 +374,10 @@ async def find_arbitrage_endpoint(
     description="Fetches the list of available sports keys from The Odds API. Requires server-side ODDS_API_KEY configuration.",
     tags=["Arbitrage Operations"]
 )
-async def list_available_sports_endpoint(api_key: str = Depends(get_configured_api_key)):
+async def list_available_sports_endpoint(
+        api_key: str = Depends(get_configured_api_key),
+        user: User = Depends(get_current_user),
+):
     """
     Endpoint to retrieve all available sports that can be used to find odds.
     """
