@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException, Request
 import redis.asyncio as redis
 
 from app.core.auth import get_current_user
+from app.models.users import User
 from app.settings import settings
 import os
 
@@ -51,8 +52,8 @@ async def rate_limit(uid: str, endpoint: str, max_requests: int = None, reset_du
 
 async def rate_limit_dependency(
         request: Request,  # Access request details
-        uid: str = Depends(get_current_user),
+        user: User = Depends(get_current_user),
         max_requests: int = None,  # Use environment variable if not specified
 ):
     endpoint = request.url.path  # Get the current endpoint path
-    await rate_limit(uid, endpoint, max_requests)
+    await rate_limit(user.firebase_uid, endpoint, max_requests)

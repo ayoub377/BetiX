@@ -1,10 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 
 # Import the service functions and custom exceptions
 from app.services.dixon_coles.dixon_coles_service import (
-    ModelNotFoundError, 
-    TeamNotFoundError, 
+    ModelNotFoundError,
+    TeamNotFoundError,
     DataNotFoundError,
     get_prediction,
     get_teams_for_league,
@@ -20,6 +20,9 @@ from app.models.predictions import (
     PredictionResponse,
     TeamListResponse,
 )
+
+from app.core.auth import get_current_user, require_role
+from app.models.users import User
 
 router = APIRouter()
 
@@ -50,7 +53,10 @@ async def get_prediction_status():
         raise HTTPException(status_code=500, detail=f"Error getting status: {str(e)}")
 
 @router.post("/train", response_model=TrainResponse)
-async def train_model(request: TrainRequest):
+async def train_model(
+    request: TrainRequest,
+    _admin: User = Depends(require_role("admin")),
+):
     """
     Train a Dixon-Coles model for a specific league.
     """
@@ -63,7 +69,10 @@ async def train_model(request: TrainRequest):
         raise HTTPException(status_code=400, detail=f"Training failed: {e}")
 
 @router.post("/predict", response_model=PredictionResponse)
-async def create_prediction(request: PredictionRequest):
+async def create_prediction(
+    request: PredictionRequest,
+    user: User = Depends(get_current_user),
+):
     """
     Get a match prediction for two teams in a specific league.
     """

@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import { apiClient, isApiError } from '@/lib/apiClient';
 // import Navbar from '@/components/layout/Navbar'; // Assuming you have a Navbar
 // import Footer from '@/components/layout/Footer'; // Assuming you have a Footer
 
@@ -241,22 +241,25 @@ export default function ArbitragePage() {
         params.sports = sports.trim();
       }
 
-      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000/api'; // Use environment variable
-      const response = await axios.get<ArbitrageResponse>(`${API_BASE_URL}/arbitrage/`, { params });
+      const response = await apiClient.get<ArbitrageResponse>('/arbitrage/', { params });
 
       setOpportunities(response.data.opportunities.sort((a,b) => b.profit_margin_percentage - a.profit_margin_percentage));
       setLastRefreshed(new Date());
 
     } catch (err) {
       console.error("Error fetching arbitrage opportunities:", err);
-      if (axios.isAxiosError(err) && err.response) {
-         const errorDetail = err.response.data.detail;
-         if (typeof errorDetail === 'string') {
-            setError(errorDetail);
-         } else if (errorDetail && typeof errorDetail.message === 'string') {
-            setError(`${errorDetail.type || 'API Error'}: ${errorDetail.message}`);
+      if (isApiError(err) && err.response) {
+         if (err.response.status === 401) {
+            setError("Please sign in to discover arbitrage opportunities.");
          } else {
-            setError("Could not fetch opportunities. Please check parameters or try again.");
+            const errorDetail = (err.response.data as any)?.detail;
+            if (typeof errorDetail === 'string') {
+               setError(errorDetail);
+            } else if (errorDetail && typeof errorDetail.message === 'string') {
+               setError(`${errorDetail.type || 'API Error'}: ${errorDetail.message}`);
+            } else {
+               setError("Could not fetch opportunities. Please check parameters or try again.");
+            }
          }
       } else {
         setError("An unexpected error occurred. Please try again.");

@@ -2,9 +2,9 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import axios from 'axios';
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext"; // Ensure this path is correct
+import { apiClient, isApiError } from '@/lib/apiClient';
 import Button from "@/components/ui/Button"; // Assuming you have this custom Button
 
 // Interfaces (PlayerDetail, PositionComparison, ApiFullResponse)
@@ -29,8 +29,8 @@ interface ApiFullResponse {
   comparison: ComparisonItemsArray;
 }
 
-// This constant should ideally be in sync with AuthContext or a shared config
-const NORMAL_USER_MAX_REQUESTS = 5;
+// Fallback only — the real limit comes from `quotas.daily_compare_limit` returned by /api/users/me.
+const FALLBACK_NORMAL_LIMIT = 5;
 
 export default function ProAnalysisPage() {
   const {
@@ -112,15 +112,8 @@ export default function ProAnalysisPage() {
     setApiAwayTeamName('');
 
     try {
-      const token = await firebaseUser.getIdToken();
-
-      const response = await axios.get<ApiFullResponse>(
-        `http://localhost:9000/api/clubs/compare/${encodeURIComponent(homeTeamName)}/${encodeURIComponent(awayTeamName)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        }
+      const response = await apiClient.get<ApiFullResponse>(
+        `/clubs/compare/${encodeURIComponent(homeTeamName)}/${encodeURIComponent(awayTeamName)}`
       );
 
       if (response.data && response.data.comparison && response.data.comparison.length > 0) {
@@ -138,7 +131,7 @@ export default function ProAnalysisPage() {
       console.error("--- Full Axios Error Object Below ---");
       console.error(err);
 
-      if (axios.isAxiosError(err)) {
+      if (isApiError(err)) {
         console.log("--- Axios Error Detected ---");
         if (err.response) {
           console.error("Axios Error Response Data:", err.response.data);
@@ -230,7 +223,7 @@ export default function ProAnalysisPage() {
       <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 dark:bg-slate-900 p-6 text-center">
         <h2 className="text-2xl font-bold text-red-500 dark:text-red-400 mb-4">Daily Limit Reached</h2>
         <p className="text-gray-700 dark:text-gray-300 mb-2">
-          You have used your {NORMAL_USER_MAX_REQUESTS} free analysis requests for today.
+          You have used your {(customUserProfile?.quotas.daily_compare_limit ?? FALLBACK_NORMAL_LIMIT)} free analysis requests for today.
         </p>
         {nextQuotaResetTimeDisplay && (
             <p className="text-gray-600 dark:text-gray-400 mb-1">Your requests will reset {nextQuotaResetTimeDisplay}.</p>
@@ -280,7 +273,7 @@ export default function ProAnalysisPage() {
               ) : (
                 <>
                   <p className="font-medium text-blue-600 dark:text-sky-400">
-                    Daily requests remaining: <span className="font-bold">{requestsLeftToday < 0 ? 0 : requestsLeftToday}</span> / {NORMAL_USER_MAX_REQUESTS}
+                    Daily requests remaining: <span className="font-bold">{requestsLeftToday < 0 ? 0 : requestsLeftToday}</span> / {(customUserProfile?.quotas.daily_compare_limit ?? FALLBACK_NORMAL_LIMIT)}
                   </p>
                   {requestsLeftToday <= 0 && nextQuotaResetTimeDisplay && (
                      <p className="text-xs text-gray-500 dark:text-gray-400">Next reset: {nextQuotaResetTimeDisplay}</p>

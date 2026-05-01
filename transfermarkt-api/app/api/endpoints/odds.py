@@ -13,8 +13,9 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
-# from app.core.auth import has_access
+from app.core.auth import get_current_user, require_role
 from app.core.config import redis_client, rate_limit_dependency
+from app.models.users import User
 # from app.models.odds import MatchData, Outcome, H2HMarket, Bookmaker
 from dotenv import load_dotenv
 from app.models.sport import SportType
@@ -97,7 +98,11 @@ class TrackRequest(BaseModel):
 
 
 @router.post("/track")
-async def track_match(body: TrackRequest, redis_client=Depends(get_redis)):
+async def track_match(
+    body: TrackRequest,
+    redis_client=Depends(get_redis),
+    user: User = Depends(get_current_user),
+):
     logger.info("=== /odds/track called with body: %s", body)
 
     try:
@@ -491,7 +496,11 @@ async def get_match_history_summary(match_id: str, redis_client=Depends(get_redi
 # odds.py — add this route after /tracked
 
 @router.delete("/untrack/{match_id}")
-async def untrack_match(match_id: str, redis_client=Depends(get_redis)):
+async def untrack_match(
+    match_id: str,
+    redis_client=Depends(get_redis),
+    user: User = Depends(get_current_user),
+):
     """
     Stop tracking a match and remove it from the scheduler.
     History is preserved in Redis — only active tracking stops.
@@ -520,7 +529,10 @@ async def untrack_match(match_id: str, redis_client=Depends(get_redis)):
 
 
 @router.post("/result/{match_id}/refresh")
-async def refresh_match_result(match_id: str):
+async def refresh_match_result(
+    match_id: str,
+    user: User = Depends(get_current_user),
+):
     """Force an immediate Odds API scores fetch for a match.
 
     Useful after a result poll timed out, or to backfill a result that the
@@ -580,7 +592,11 @@ async def refresh_match_result(match_id: str):
 
 
 @router.get("/match/{match_id}/dataset")
-async def get_match_dataset(match_id: str, redis_client=Depends(get_redis)):
+async def get_match_dataset(
+    match_id: str,
+    redis_client=Depends(get_redis),
+    _admin: User = Depends(require_role("admin")),
+):
     """Return the structured per-match dataset: meta + snapshots + result.
 
     Snapshots come from PostgreSQL (or Redis if DB is empty), each enriched
@@ -616,7 +632,10 @@ async def get_match_dataset(match_id: str, redis_client=Depends(get_redis)):
 
 
 @router.delete("/untrack/all")
-async def untrack_all_matches(redis_client=Depends(get_redis)):
+async def untrack_all_matches(
+    redis_client=Depends(get_redis),
+    _admin: User = Depends(require_role("admin")),
+):
     """
     Stop tracking ALL matches at once. Useful for cleanup.
     History is preserved — only active tracking stops.

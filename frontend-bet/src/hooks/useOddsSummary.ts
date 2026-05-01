@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import { apiClient, isApiError } from '@/lib/apiClient';
 import type {
   OddsSummaryResponse,
   TrackedMatch,
   AllMatchesResponse,
 } from '@/types/odds';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:9000/api';
 
 export function useTrackedMatches() {
   const [matches, setMatches] = useState<TrackedMatch[]>([]);
@@ -17,9 +15,7 @@ export function useTrackedMatches() {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await axios.get<AllMatchesResponse>(
-        `${API_BASE_URL}/odds/matches`
-      );
+      const res = await apiClient.get<AllMatchesResponse>('/odds/matches');
       setMatches(res.data.matches);
     } catch (err) {
       console.error('Failed to fetch tracked matches:', err);
@@ -45,13 +41,11 @@ export function useOddsSummary(matchId: string | null) {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await axios.get<OddsSummaryResponse>(
-        `${API_BASE_URL}/odds/history/${id}/summary`
-      );
+      const res = await apiClient.get<OddsSummaryResponse>(`/odds/history/${id}/summary`);
       setData(res.data);
     } catch (err) {
       console.error('Failed to fetch odds summary:', err);
-      if (axios.isAxiosError(err) && err.response?.status === 404) {
+      if (isApiError(err) && err.response?.status === 404) {
         setError('No odds history found for this match.');
       } else {
         setError('Failed to load odds history.');
