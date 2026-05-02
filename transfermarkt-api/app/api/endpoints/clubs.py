@@ -13,7 +13,11 @@ from fastapi import APIRouter, HTTPException, Depends
 from dotenv import load_dotenv
 
 from app.core import auth
-from app.core.config import redis_client, rate_limit_dependency
+from app.core.config import make_tier_rate_limit_dependency, rate_limit_dependency, redis_client
+from app.core.quotas import DAILY_COMPARE_LIMIT
+
+# PR2: tier-aware /compare quota (5/day normal, 100/day premium, unlimited admin).
+compare_daily_quota = make_tier_rate_limit_dependency(DAILY_COMPARE_LIMIT)
 from app.models.loader import fetch_club_id, fetch_club_players_data
 from app.services.clubs.players import TransfermarktClubPlayers
 from app.services.clubs.profile import TransfermarktClubProfile
@@ -1038,7 +1042,10 @@ async def get_comparison_progress(home_team: str, away_team: str):
     )
 
 
-@router.get("/compare/{home_team}/{away_team}", dependencies=[Depends(auth.has_access)])
+@router.get(
+    "/compare/{home_team}/{away_team}",
+    dependencies=[Depends(compare_daily_quota)],
+)
 async def get_comparaison_result(home_team: str, away_team: str):
     print(f"DEBUG: Starting comparison for {home_team} vs {away_team}")
 

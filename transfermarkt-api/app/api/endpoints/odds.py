@@ -15,6 +15,14 @@ from pydantic import BaseModel, field_validator
 
 from app.core.auth import get_current_user, require_role
 from app.core.config import redis_client, rate_limit_dependency
+from app.core.quotas import (
+    CONCURRENT_TRACKER_LIMIT,
+    DAILY_TRACK_LIMIT,
+    TRACK_KICKOFF_LOOKAHEAD_SECONDS,
+    TRACK_POLL_INTERVAL_SECONDS,
+    normalize_role,
+)
+from app.models.odds_models import TrackedMatch
 from app.models.users import User
 # from app.models.odds import MatchData, Outcome, H2HMarket, Bookmaker
 from dotenv import load_dotenv
@@ -152,6 +160,48 @@ async def track_match(
         return {"match_id": match_id, "status": "already_tracked", "meta": meta}
 
     # ------------------------------------------------------------------
+    # Step 2b — Tier checks (PR2): daily new-track count + concurrent cap.
+    # Run BEFORE the expensive FlashScore scrape so a quota-blocked user
+    # doesn't burn ~5s of scraper time. The kickoff-lookahead check
+    # happens after meta resolution because it needs start_time.
+    # ------------------------------------------------------------------
+    role = normalize_role(user.role)
+    daily_track_cap = DAILY_TRACK_LIMIT[role]
+    daily_track_key = f"daily_tracks:{user.firebase_uid}"
+    if daily_track_cap != -1:
+        current_raw = await redis_client.get(daily_track_key)
+        current_daily_tracks = int(current_raw) if current_raw else 0
+        if current_daily_tracks >= daily_track_cap:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Daily tracking limit reached ({daily_track_cap}/day for "
+                    f"{role} tier). Resets in 24h or upgrade for more."
+                ),
+            )
+
+    concurrent_cap = CONCURRENT_TRACKER_LIMIT[role]
+    if concurrent_cap != -1:
+        session_q = SessionLocal()
+        try:
+            active_count = (
+                session_q.query(TrackedMatch)
+                .filter(TrackedMatch.user_id == user.id, TrackedMatch.status == "tracking")
+                .count()
+            )
+        finally:
+            session_q.close()
+        if active_count >= concurrent_cap:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"You already have {active_count}/{concurrent_cap} concurrent "
+                    f"trackers running ({role} tier). Untrack one to free a slot, "
+                    "or upgrade for more."
+                ),
+            )
+
+    # ------------------------------------------------------------------
     # Step 3 — Scrape match info
     # ------------------------------------------------------------------
     logger.info("Step 3: Fetching match info for match_id='%s' (sport=%s)", match_id, sport.value)
@@ -264,8 +314,44 @@ async def track_match(
     else:
         meta["start_time_source"] = "flashscore"
 
+    # ------------------------------------------------------------------
+    # Step 5b — Kickoff lookahead check (PR2). Now that we have the
+    # authoritative start_time (Odds API > FlashScore), enforce the
+    # tier's lookahead window. Doing it here avoids registering and
+    # then immediately tearing down a tracker we'd reject anyway.
+    # ------------------------------------------------------------------
+    max_lookahead = TRACK_KICKOFF_LOOKAHEAD_SECONDS[role]
+    if max_lookahead != -1 and meta.get("start_time"):
+        try:
+            kickoff_dt = datetime.fromisoformat(meta["start_time"].replace("Z", "+00:00"))
+            if kickoff_dt.tzinfo is None:
+                kickoff_dt = kickoff_dt.replace(tzinfo=timezone.utc)
+            seconds_to_kickoff = (kickoff_dt - datetime.now(timezone.utc)).total_seconds()
+            if seconds_to_kickoff > max_lookahead:
+                hours_allowed = max_lookahead // 3600
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Kickoff is too far in the future for your tier "
+                        f"({role}: max {hours_allowed}h ahead). Upgrade to track "
+                        "matches further out."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("Kickoff lookahead check skipped (parse failed): %s", e)
+
+    # Stamp owner + per-tier poll cadence onto meta so persist_match() writes
+    # them and the post-restart recovery path can re-schedule at the right rate.
+    # ``user_id`` is stored as a string because the meta dict is JSON-encoded
+    # to Redis; SQLAlchemy still accepts the string into the UUID column.
+    poll_interval = TRACK_POLL_INTERVAL_SECONDS[role]
+    meta["user_id"] = str(user.id)
+    meta["poll_interval_seconds"] = poll_interval
+
     await register_match(redis_client, match_id, meta)
-    logger.info("Step 5 complete: meta stored.")
+    logger.info("Step 5 complete: meta stored (poll_interval=%ds).", poll_interval)
 
     # ------------------------------------------------------------------
     # Step 6 — Store initial odds snapshot (with sharp odds if available)
@@ -299,17 +385,34 @@ async def track_match(
         logger.info("Step 6: No valid initial odds yet.")
 
     # ------------------------------------------------------------------
-    # Step 7 — Start scheduler
+    # Step 7 — Start scheduler at the user's tier-specific cadence.
     # ------------------------------------------------------------------
-    start_tracking_job(match_id, scraper, redis_client, sport=sport.value)
-    logger.info("Step 7: Scheduler job registered.")
+    start_tracking_job(
+        match_id, scraper, redis_client,
+        sport=sport.value,
+        poll_interval_seconds=poll_interval,
+    )
+    logger.info("Step 7: Scheduler job registered (poll_interval=%ds).", poll_interval)
+
+    # ------------------------------------------------------------------
+    # Step 8 — Charge against the user's daily track quota. Done last so
+    # a request that fails earlier (e.g. scrape error → 500) doesn't
+    # consume the slot. SET with 24h TTL on first use of the day, INCR
+    # otherwise so the existing TTL is preserved.
+    # ------------------------------------------------------------------
+    if daily_track_cap != -1:
+        post_raw = await redis_client.get(daily_track_key)
+        if post_raw is None:
+            await redis_client.set(daily_track_key, 1, ex=86400)
+        else:
+            await redis_client.incr(daily_track_key)
 
     return {
         "match_id": match_id,
         "sport": sport.value,
         "status": "tracking_started",
         "meta": meta,
-        "message": f"Tracking {sport.value} odds every {SCRAPE_INTERVAL_SECONDS}s until kickoff.",
+        "message": f"Tracking {sport.value} odds every {poll_interval}s until kickoff.",
     }
 
 @router.get("/tracked")

@@ -58,26 +58,39 @@ async def lifespan(app_: FastAPI):
 
     if tracked_ids:
         logger.info("Resuming %d tracking jobs...", len(tracked_ids))
-        for i, match_id in enumerate(tracked_ids):
-            meta = await get_match_meta(redis_client, match_id)
-            if meta and meta.get("status") == "tracking":
-                # Determine the sport from stored metadata (default to football)
-                sport_str = meta.get("sport", "football")
-                try:
-                    sport = SportType(sport_str)
-                except ValueError:
-                    sport = SportType.FOOTBALL
-                scraper = scrapers.get(sport, scrapers[SportType.FOOTBALL])
+        # Look up the per-row poll interval from Postgres so each restart
+        # honours the cadence the owning user's tier was on at /track time.
+        from app.models.database import SessionLocal
+        from app.services.odds_tracker.snapshot_persistence import get_match_meta_from_db
 
-                # Stagger the first run by 'i' seconds so they don't all hit at once
-                start_delay = i * 1.5
-                start_tracking_job(
-                    match_id,
-                    scraper,
-                    redis_client,
-                    initial_delay=start_delay,
-                    sport=sport_str,
-                )
+        db_session = SessionLocal()
+        try:
+            for i, match_id in enumerate(tracked_ids):
+                meta = await get_match_meta(redis_client, match_id)
+                if meta and meta.get("status") == "tracking":
+                    # Determine the sport from stored metadata (default to football)
+                    sport_str = meta.get("sport", "football")
+                    try:
+                        sport = SportType(sport_str)
+                    except ValueError:
+                        sport = SportType.FOOTBALL
+                    scraper = scrapers.get(sport, scrapers[SportType.FOOTBALL])
+
+                    db_meta = get_match_meta_from_db(db_session, match_id)
+                    poll_interval = db_meta.get("poll_interval_seconds") if db_meta else None
+
+                    # Stagger the first run by 'i' seconds so they don't all hit at once
+                    start_delay = i * 1.5
+                    start_tracking_job(
+                        match_id,
+                        scraper,
+                        redis_client,
+                        initial_delay=start_delay,
+                        sport=sport_str,
+                        poll_interval_seconds=poll_interval,
+                    )
+        finally:
+            db_session.close()
 
     # 3b. Recover Pending Result-Polling Jobs
     try:
