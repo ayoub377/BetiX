@@ -22,7 +22,12 @@ from app.models.predictions import (
 )
 
 from app.core.auth import get_current_user, require_role
+from app.core.config import make_tier_rate_limit_dependency
+from app.core.quotas import DAILY_PREDICT_LIMIT
 from app.models.users import User
+
+# PR2: tier-aware /predict quota (5/day normal, 100/day premium, unlimited admin).
+predict_daily_quota = make_tier_rate_limit_dependency(DAILY_PREDICT_LIMIT)
 
 router = APIRouter()
 
@@ -68,7 +73,11 @@ async def train_model(
     except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=400, detail=f"Training failed: {e}")
 
-@router.post("/predict", response_model=PredictionResponse)
+@router.post(
+    "/predict",
+    response_model=PredictionResponse,
+    dependencies=[Depends(predict_daily_quota)],
+)
 async def create_prediction(
     request: PredictionRequest,
     user: User = Depends(get_current_user),

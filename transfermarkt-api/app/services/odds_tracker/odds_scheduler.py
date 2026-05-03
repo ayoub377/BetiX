@@ -175,22 +175,36 @@ def job_id(match_id: str) -> str:
     return f"odds_scrape_{match_id}"
 
 
-def start_tracking_job(match_id: str, scraper, redis_client, initial_delay: float = 0, sport: str = "football"):
+def start_tracking_job(
+    match_id: str,
+    scraper,
+    redis_client,
+    initial_delay: float = 0,
+    sport: str = "football",
+    poll_interval_seconds: int | None = None,
+):
     """
     Schedules a job.
     initial_delay: seconds to wait before the very first execution (useful for restarts).
     sport: the sport type for this match (determines odds key names).
+    poll_interval_seconds: how often to refresh odds. Falls back to the global
+      ``SCRAPE_INTERVAL_SECONDS`` for legacy callers / matches without a per-row
+      cadence (PR2 sets this from the user's tier; before PR2 it was a constant).
     """
+    interval = poll_interval_seconds if poll_interval_seconds and poll_interval_seconds > 0 else SCRAPE_INTERVAL_SECONDS
     run_time = datetime.now(timezone.utc) + timedelta(seconds=initial_delay)
 
     scheduler.add_job(
         make_scrape_job(match_id, scraper, redis_client, sport=sport),
-        trigger=IntervalTrigger(seconds=SCRAPE_INTERVAL_SECONDS),
+        trigger=IntervalTrigger(seconds=interval),
         id=job_id(match_id),
         replace_existing=True,
         next_run_time=run_time,
     )
-    logger.info("Match %s (%s) scheduled (Start delay: %.1fs)", match_id, sport, initial_delay)
+    logger.info(
+        "Match %s (%s) scheduled (interval=%ds, start delay=%.1fs)",
+        match_id, sport, interval, initial_delay,
+    )
 
 
 def stop_tracking_job(match_id: str):

@@ -11,6 +11,7 @@ export type UserRole = 'normal' | 'premium' | 'admin';
 export interface UserQuotas {
   daily_predict_limit: number;
   daily_compare_limit: number;
+  daily_track_limit: number;
   concurrent_tracker_limit: number;
   track_poll_interval_seconds: number;
   track_kickoff_lookahead_seconds: number;

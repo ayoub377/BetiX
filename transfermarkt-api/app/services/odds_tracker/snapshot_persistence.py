@@ -14,7 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 def persist_match(session: Session, match_id: str, meta: dict):
-    """Insert or ignore match metadata. Idempotent — skips if already exists."""
+    """Insert or ignore match metadata. Idempotent — skips if already exists.
+
+    Reads ``user_id`` and ``poll_interval_seconds`` from ``meta`` when present
+    (set by the /odds/track endpoint based on the authenticated user's tier).
+    """
     existing = session.query(TrackedMatch).filter_by(match_id=match_id).first()
     if existing:
         return
@@ -29,6 +33,8 @@ def persist_match(session: Session, match_id: str, meta: dict):
         tracked_since=meta.get("tracked_since"),
         odds_api_event_id=meta.get("odds_api_event_id"),
         odds_api_sport_key=meta.get("odds_api_sport_key"),
+        user_id=meta.get("user_id"),
+        poll_interval_seconds=meta.get("poll_interval_seconds"),
     )
     session.add(row)
     session.commit()
@@ -282,4 +288,6 @@ def get_match_meta_from_db(session: Session, match_id: str) -> Optional[dict]:
         "tracked_since": row.tracked_since,
         "odds_api_event_id": row.odds_api_event_id,
         "odds_api_sport_key": row.odds_api_sport_key,
+        "user_id": str(row.user_id) if row.user_id else None,
+        "poll_interval_seconds": row.poll_interval_seconds,
     }

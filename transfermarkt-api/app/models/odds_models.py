@@ -1,4 +1,5 @@
-from sqlalchemy import Boolean, Column, Integer, String, Float, Text, Index
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Float, Text, Index
+from sqlalchemy.dialects.postgresql import UUID
 from app.models.team import Base
 
 
@@ -17,6 +18,14 @@ class TrackedMatch(Base):
     # Odds API event mapping (populated when ODDS_API_KEY is set)
     odds_api_event_id = Column(String(100), nullable=True)
     odds_api_sport_key = Column(String(100), nullable=True)
+    # Owning user (PR2). Nullable to keep legacy rows valid; new rows always
+    # have it. We index it because /odds/track checks the user's concurrent
+    # tracker count on every request.
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    # Per-tier polling cadence baked onto the row at /track time so the
+    # startup recovery path in main.py can re-schedule jobs at the right
+    # cadence after a restart, even if we change the tier matrix later.
+    poll_interval_seconds = Column(Integer, nullable=True)
 
 
 class OddsSnapshot(Base):
