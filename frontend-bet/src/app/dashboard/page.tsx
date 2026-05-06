@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import LogoutButton from "@/components/ui/LogoutButton"; // Assuming this is your reusable logout button
 import { useAuth } from '@/contexts/AuthContext'; // Import your AuthContext hook
+import { apiClient, isApiError } from '@/lib/apiClient';
 
 // Fallback only — real limit comes from `quotas.daily_compare_limit` returned by /api/users/me.
 const FALLBACK_NORMAL_LIMIT = 5;
@@ -35,6 +36,8 @@ export default function DashboardPage() {
   } = useAuth();
 
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [isOpeningPortal, setIsOpeningPortal] = useState(false);
+  const [billingError, setBillingError] = useState<string | null>(null);
   // isLoading state from context (isLoadingAuth) will handle initial page load.
   // Local isLoading can be used for other specific actions if needed.
 
@@ -68,6 +71,24 @@ export default function DashboardPage() {
 
   const toggleTheme = () => {
     setTheme((prevTheme) => (prevTheme === 'light' ? 'dark' : 'light'));
+  };
+
+  const handleManageBilling = async () => {
+    setIsOpeningPortal(true);
+    setBillingError(null);
+    try {
+      const res = await apiClient.post<{ url: string }>('/billing/portal');
+      window.location.assign(res.data.url);
+    } catch (err) {
+      console.error('Portal open failed:', err);
+      if (isApiError(err) && err.response) {
+        const detail = (err.response.data as { detail?: string })?.detail;
+        setBillingError(detail ?? 'Could not open billing portal.');
+      } else {
+        setBillingError('Could not open billing portal.');
+      }
+      setIsOpeningPortal(false);
+    }
   };
 
   // The LogoutButton component now handles its own logout logic.
@@ -176,11 +197,28 @@ export default function DashboardPage() {
             </div>
             {!isUserPremium && (
               <button
-                onClick={() => router.push('/pricing')} // Link to your pricing/upgrade page
+                onClick={() => router.push('/pricing')}
                 className="mt-4 w-full bg-gradient-to-r from-purple-500 via-pink-500 to-red-500 hover:from-purple-600 hover:via-pink-600 hover:to-red-600 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:shadow-lg transition-all duration-300 ease-in-out transform hover:scale-105 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
               >
-                <Zap className="h-5 w-5 mr-2" /> Upgrade to Pro (Future)
+                <Zap className="h-5 w-5 mr-2" /> Upgrade to Premium
               </button>
+            )}
+            {/* Premium (non-admin) users get a "Manage billing" link that
+                opens the LemonSqueezy customer portal — for changing payment
+                method, downloading invoices, or cancelling. */}
+            {customUserProfile?.role === 'premium' && (
+              <button
+                onClick={handleManageBilling}
+                disabled={isOpeningPortal}
+                className="mt-4 w-full py-2.5 px-4 rounded-lg bg-white dark:bg-slate-700 border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-600 text-sm font-medium transition-colors disabled:opacity-60"
+              >
+                {isOpeningPortal ? 'Opening portal…' : 'Manage billing'}
+              </button>
+            )}
+            {billingError && (
+              <p className="mt-2 text-xs text-red-600 dark:text-red-400 text-center">
+                {billingError}
+              </p>
             )}
             {customUserProfile && !isUserPremium && refreshUserProfile && (
                  <button

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from firebase_admin import firestore
 from app.models.users import WaitlistEmail
-from app.api.endpoints import clubs, competitions, players, odds, arbitrage, predictions, users
+from app.api.endpoints import billing, clubs, competitions, players, odds, arbitrage, predictions, users
 
 api_router = APIRouter()
 
@@ -25,6 +25,9 @@ api_router.include_router(predictions.router, prefix="/predictions", tags=["Dixo
 
 #users
 api_router.include_router(users.router, prefix="/users", tags=["users"])
+
+#billing (LemonSqueezy)
+api_router.include_router(billing.router, prefix="/billing", tags=["billing"])
 
 
 @api_router.post("/waitlist", tags=["waitlist"])
