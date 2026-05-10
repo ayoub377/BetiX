@@ -1,208 +1,312 @@
-// src/components/layout/Navbar.tsx
-"use client"
-import React, {useEffect, useState, useCallback} from "react";
-// 👇 Corrected imports for App Router
+// src/app/layout/Navbar.tsx
+"use client";
+
+import React, { useEffect, useState, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import {ChevronDown, UserCircle as UserAccountIcon} from "lucide-react";
-import {clsx} from "clsx";
+import { ChevronDown, ShieldCheck, Sparkles, UserCircle as UserAccountIcon, Zap } from "lucide-react";
+import { clsx } from "clsx";
+
 import { useAuth } from "@/contexts/AuthContext";
 import Button from "@/components/ui/Button";
 import { ThemeToggleButton } from "@/components/ui/ThemeToggleButton";
 
-const LogoutIcon = (props: React.SVGProps<SVGSVGElement>) => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} {...props} >
-        <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-    </svg>
+const MobileMenuIcon = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-3.75 5.25h16.5" />
+  </svg>
 );
 
-const MobileMenuIcon = (props: React.SVGProps<SVGSVGElement>) => (
-    <svg fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-3.75 5.25h16.5" />
-    </svg>
-);
+const SERVICE_LINKS = [
+  { href: "/track", label: "Track a Match", description: "Start live odds tracking" },
+  { href: "/odds", label: "Odds Tracker", description: "Live odds movement charts" },
+  { href: "/pro-analysis", label: "Lineup Comparison", description: "Compare team rosters by position" },
+  { href: "/predictions", label: "Match Predictions", description: "Dixon-Coles outcome probabilities" },
+  // { href: "/arbitrage", label: "Arbitrage", description: "Risk-free opportunities across books" },
+];
+
+interface RoleBadgeProps {
+  role: "normal" | "premium" | "admin";
+}
+
+function RoleBadge({ role }: RoleBadgeProps) {
+  const config: Record<RoleBadgeProps["role"], { label: string; icon: React.ReactNode; className: string }> = {
+    normal: {
+      label: "Free",
+      icon: null,
+      className: "bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-gray-300 border border-gray-200 dark:border-slate-600",
+    },
+    premium: {
+      label: "Premium",
+      icon: <Sparkles className="h-3 w-3" />,
+      className: "bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-sm",
+    },
+    admin: {
+      label: "Admin",
+      icon: <ShieldCheck className="h-3 w-3" />,
+      className: "bg-gradient-to-r from-amber-500 to-rose-500 text-white shadow-sm",
+    },
+  };
+  const c = config[role];
+  return (
+    <span
+      className={clsx(
+        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold tracking-wide",
+        c.className,
+      )}
+    >
+      {c.icon}
+      {c.label}
+    </span>
+  );
+}
 
 export default function Navbar() {
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
-    const [isMobileDropdownOpen, setIsMobileDropdownOpen] = useState(false);
-    const [isDesktopDropdownOpen, setIsDesktopDropdownOpen] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isMobileDropdownOpen, setIsMobileDropdownOpen] = useState(false);
+  const [isDesktopDropdownOpen, setIsDesktopDropdownOpen] = useState(false);
 
-    const router = useRouter(); // From next/navigation
-    const pathname = usePathname(); // From next/navigation
-    const { firebaseUser, isLoadingAuth } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const { firebaseUser, isLoadingAuth, customUserProfile } = useAuth();
+  const role = customUserProfile?.role ?? null;
 
-    const handleSectionClick = (sectionId: string) => (e: React.MouseEvent<HTMLAnchorElement, MouseEvent>) => {
-        if (pathname === '/') { // Use pathname from usePathname()
-            e.preventDefault();
-            const navbar = document.querySelector('#navbar');
-            const element = document.getElementById(sectionId);
+  const handleSectionClick = (sectionId: string) => (e: React.MouseEvent<HTMLAnchorElement, MouseEvent>) => {
+    if (pathname === "/") {
+      e.preventDefault();
+      const navbar = document.querySelector("#navbar");
+      const element = document.getElementById(sectionId);
+      if (element && navbar) {
+        const offset = navbar.scrollHeight || 0;
+        const bodyRect = document.body.getBoundingClientRect().top;
+        const elementRect = element.getBoundingClientRect().top;
+        const offsetPosition = elementRect - bodyRect - offset;
+        window.scrollTo({ top: offsetPosition, behavior: "smooth" });
+      }
+    } else {
+      router.push(`/#${sectionId}`);
+    }
+    setIsDesktopDropdownOpen(false);
+    setIsMenuOpen(false);
+  };
 
-            if (element && navbar) {
-                const offset = navbar.scrollHeight || 0;
-                const bodyRect = document.body.getBoundingClientRect().top;
-                const elementRect = element.getBoundingClientRect().top;
-                const elementPosition = elementRect - bodyRect;
-                const offsetPosition = elementPosition - offset;
+  // Close menus on route change
+  useEffect(() => {
+    setIsMenuOpen(false);
+    setIsMobileDropdownOpen(false);
+    setIsDesktopDropdownOpen(false);
+  }, [pathname]);
 
-                window.scrollTo({
-                    top: offsetPosition,
-                    behavior: 'smooth'
-                });
-            }
-        } else {
-            router.push(`/#${sectionId}`); // router from next/navigation
-        }
-        setIsDesktopDropdownOpen(false);
-        setIsMenuOpen(false);
-    };
+  const isServicesActive = SERVICE_LINKS.some((s) => pathname === s.href || pathname.startsWith(s.href + "/"));
+  const isHomeActive = pathname === "/";
 
-    // Close menus on route change using pathname from usePathname()
-    useEffect(() => {
-        setIsMenuOpen(false);
-        setIsMobileDropdownOpen(false);
-        setIsDesktopDropdownOpen(false);
-    }, [pathname]); // Trigger when pathname changes
+  const desktopNavLinkBase =
+    "px-3 py-2 rounded-md text-sm font-medium border-2 border-transparent transition-all duration-200 ease-in-out hover:bg-gray-100 dark:hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:focus-visible:ring-sky-500 focus-visible:ring-opacity-75";
+  const desktopNavInactive = "text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-sky-400";
+  const desktopNavActive = "text-blue-600 dark:text-sky-400 bg-blue-50 dark:bg-sky-900/20";
 
-  const desktopNavLinkStyles = "px-3 py-2 rounded-md text-sm font-medium text-gray-600 dark:text-gray-300 border-2 border-transparent transition-all duration-200 ease-in-out hover:text-blue-600 dark:hover:text-sky-400 hover:bg-gray-100 dark:hover:bg-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:focus-visible:ring-sky-500 focus-visible:ring-opacity-75";
-  const desktopNavDropdownTriggerStyles = `${desktopNavLinkStyles} flex items-center gap-1 cursor-pointer`;
+  const desktopNavLinkStyles = (active: boolean) => clsx(desktopNavLinkBase, active ? desktopNavActive : desktopNavInactive);
+  const desktopNavDropdownTriggerStyles = clsx(desktopNavLinkStyles(isServicesActive), "flex items-center gap-1 cursor-pointer");
 
   const handleAccountRedirect = useCallback(() => {
     if (isLoadingAuth) return;
-
-    if (firebaseUser) {
-      router.push('/dashboard'); // router from next/navigation
-    } else {
-      router.push('/auth/login'); // router from next/navigation
-    }
+    router.push(firebaseUser ? "/dashboard" : "/auth/login");
     setIsMenuOpen(false);
   }, [firebaseUser, isLoadingAuth, router]);
 
+  return (
+    <nav
+      id="navbar"
+      className="bg-white/95 dark:bg-slate-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/75 dark:supports-[backdrop-filter]:bg-slate-900/75 text-gray-700 dark:text-gray-300 shadow-sm sticky top-0 left-0 w-full z-50 border-b border-gray-200 dark:border-slate-700"
+    >
+      <div className="container mx-auto flex items-center justify-between p-4">
+        <div className="flex items-center gap-8">
+          <Link href="/" aria-label="Go to homepage" onClick={() => setIsMenuOpen(false)} className="flex items-center gap-2">
+            <img src="/assets/logo-saas.jpg" alt="Sharper Bets logo" className="w-auto h-10 md:h-12 rounded-md" />
+            <span className="hidden sm:inline-block text-base font-bold text-gray-800 dark:text-gray-100">
+              Sharper Bets
+            </span>
+          </Link>
 
-    return (
-        <nav id="navbar" className="bg-gradient-to-b from-white to-gray-50 dark:from-slate-900 dark:to-slate-800 text-gray-700 dark:text-gray-300 shadow-sm fixed top-0 left-0 w-full z-50 border-b border-gray-200 dark:border-slate-700">
-            <div className="container mx-auto flex items-center justify-between p-4">
-                 <div className="flex items-center gap-8">
-                    <Link href="/" aria-label="Go to homepage" onClick={() => setIsMenuOpen(false)}>
-                        <img src="/assets/logo-saas.jpg" alt="Sharper Bets logo" className="w-auto h-12 md:h-14"/>
-                    </Link>
+          <div className="hidden md:flex items-center space-x-1">
+            <Link href="/" className={desktopNavLinkStyles(isHomeActive)}>
+              Home
+            </Link>
 
-                    <div className="hidden md:flex items-center space-x-1">
-                        <Link href="/" className={desktopNavLinkStyles}>
-                            Home
-                        </Link>
-
-                        <div
-                            className="relative group"
-                            onMouseEnter={() => setIsDesktopDropdownOpen(true)}
-                            onMouseLeave={() => setTimeout(() => setIsDesktopDropdownOpen(false), 200)}
-                        >
-                            <button
-                                onClick={(e) => {
-                                    if (pathname === '/') { // Use pathname
-                                        e.preventDefault();
-                                        const clickEvent = e as unknown as React.MouseEvent<HTMLAnchorElement, MouseEvent>;
-                                        handleSectionClick('services')(clickEvent);
-                                    } else {
-                                        router.push('/#services'); // Use router from next/navigation
-                                    }
-                                }}
-                                className={desktopNavDropdownTriggerStyles}
-                                aria-expanded={isDesktopDropdownOpen}
-                            >
-                                Services <ChevronDown
-                                className={clsx('transition-transform duration-150 text-gray-500 dark:text-gray-400 group-hover:text-blue-600 dark:group-hover:text-sky-400', {'rotate-180': isDesktopDropdownOpen})}
-                                size={16}
-                            />
-                            </button>
-                            <div className="absolute left-0 top-full w-full h-4 bg-transparent pointer-events-none"/>
-                            <div className={clsx(
-                                'absolute left-0 mt-0 w-56 bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-200 rounded-lg shadow-xl py-2 border border-gray-100 dark:border-slate-700',
-                                'transition-all duration-300 origin-top',
-                                !isDesktopDropdownOpen && 'opacity-0 scale-95 pointer-events-none',
-                                isDesktopDropdownOpen && 'opacity-100 scale-100'
-                            )}
-                            onMouseEnter={() => setIsDesktopDropdownOpen(true)}
-                            >
-                                <Link href="/pro-analysis" className="block py-2 px-4 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400 rounded-md transition-colors text-sm">
-                                    Lineup Comparison
-                                </Link>
-                                <Link href="/arbitrage" className="block py-2 px-4 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400 rounded-md transition-colors text-sm">
-                                    Arbitrage Opportunities
-                                </Link>
-                                <Link href="/odds" className="block py-2 px-4 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400 rounded-md transition-colors text-sm">
-                                    Odds Tracker
-                                </Link>
-                            </div>
-                        </div>
-
-                        <Link href="/#about" onClick={handleSectionClick('about')} className={desktopNavLinkStyles}>About</Link>
-                        <Link href="/#faq" onClick={handleSectionClick('faq')} className={desktopNavLinkStyles}>FAQ</Link>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                    <ThemeToggleButton />
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={handleAccountRedirect}
-                        disabled={isLoadingAuth}
-                        className="text-gray-600 dark:text-gray-400 hover:!bg-gray-100 dark:hover:!bg-slate-700 focus-visible:!ring-blue-500 dark:focus-visible:!ring-sky-500"
-                        aria-label="User account"
+            <div
+              className="relative group"
+              onMouseEnter={() => setIsDesktopDropdownOpen(true)}
+              onMouseLeave={() => setTimeout(() => setIsDesktopDropdownOpen(false), 150)}
+            >
+              <button
+                onClick={() => setIsDesktopDropdownOpen((open) => !open)}
+                className={desktopNavDropdownTriggerStyles}
+                aria-expanded={isDesktopDropdownOpen}
+                aria-haspopup="menu"
+              >
+                Services{" "}
+                <ChevronDown
+                  className={clsx("transition-transform duration-150", { "rotate-180": isDesktopDropdownOpen })}
+                  size={16}
+                />
+              </button>
+              <div className="absolute left-0 top-full w-2 h-2 bg-transparent pointer-events-none" />
+              <div
+                className={clsx(
+                  "absolute left-0 mt-1 w-72 bg-white dark:bg-slate-800 text-gray-700 dark:text-gray-200 rounded-xl shadow-xl py-2 border border-gray-100 dark:border-slate-700",
+                  "transition-all duration-200 origin-top-left",
+                  !isDesktopDropdownOpen && "opacity-0 scale-95 pointer-events-none",
+                  isDesktopDropdownOpen && "opacity-100 scale-100",
+                )}
+                role="menu"
+                onMouseEnter={() => setIsDesktopDropdownOpen(true)}
+              >
+                {SERVICE_LINKS.map((s) => {
+                  const active = pathname === s.href;
+                  return (
+                    <Link
+                      key={s.href}
+                      href={s.href}
+                      role="menuitem"
+                      className={clsx(
+                        "block py-2 px-4 transition-colors text-sm",
+                        active
+                          ? "bg-blue-50 dark:bg-sky-900/20 text-blue-700 dark:text-sky-300"
+                          : "hover:bg-gray-50 dark:hover:bg-slate-700/60",
+                      )}
                     >
-                        {isLoadingAuth ? (
-                            <div className="h-6 w-6 animate-pulse bg-gray-300 dark:bg-gray-600 rounded-full" />
-                        ) : (
-                            <UserAccountIcon className="h-6 w-6" />
-                        )}
-                    </Button>
-                    <div className="md:hidden">
-                        <Button variant="ghost" size="icon" onClick={() => setIsMenuOpen(!isMenuOpen)} className="text-gray-600 dark:text-gray-400 hover:!bg-gray-100 dark:hover:!bg-slate-700 focus-visible:!ring-blue-500 dark:focus-visible:!ring-sky-500" aria-label="Toggle mobile menu">
-                            <MobileMenuIcon className="h-6 w-6"/>
-                        </Button>
-                    </div>
-                </div>
+                      <div className="font-medium">{s.label}</div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{s.description}</div>
+                    </Link>
+                  );
+                })}
+              </div>
             </div>
 
-            {isMenuOpen && (
-                <div className="md:hidden bg-white dark:bg-slate-800 w-full absolute left-0 top-full shadow-lg border-t border-gray-200 dark:border-slate-700">
-                     <div className="flex flex-col p-4 space-y-2">
-                        <Link href="/" className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={() => setIsMenuOpen(false)}>Home</Link>
-                        <div className="">
-                            <Button
-                                variant="ghost"
-                                onClick={() => setIsMobileDropdownOpen(!isMobileDropdownOpen)}
-                                rightIcon={<ChevronDown className={clsx('transition-transform text-gray-500 dark:text-gray-400', {'rotate-180': isMobileDropdownOpen})} size={20} />}
-                                // 👇 MODIFIED HERE: Added text-left, text-base, font-medium for consistency
-                                className="cursor-pointer text-left text-base font-medium text-gray-700 dark:text-gray-200 py-2 px-3 hover:!bg-gray-100 dark:hover:!bg-slate-700 hover:!text-blue-600 dark:hover:!text-sky-400 rounded-md"
-                                aria-expanded={isMobileDropdownOpen}
-                            >
-                                Services
-                            </Button>
-                            {isMobileDropdownOpen && (
-                                <div className="ml-4 mt-2 pt-2 border-l border-gray-200 dark:border-slate-700 pl-3 flex flex-col space-y-1">
-                                    <Link href="/pro-analysis" className="block px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={() => setIsMenuOpen(false)}>Lineup Comparison</Link>
-                                    <Link href="/arbitrage" className="block px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={() => setIsMenuOpen(false)}>Arbitrage Opportunities</Link>
-                                    <Link href="/odds" className="block px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={() => setIsMenuOpen(false)}>Odds Tracker</Link>
-                                </div>
-                            )}
-                        </div>
-                        <Link href="/#about" className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={(e) => { handleSectionClick('about')(e); }}>About</Link>
-                        <Link href="/#faq" className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-blue-600 dark:hover:text-sky-400" onClick={(e) => { handleSectionClick('faq')(e); }}>FAQ</Link>
-                        <div className="pt-4 mt-2 border-t border-gray-200 dark:border-slate-700">
-                            <Button
-                                variant="ghost"
-                                onClick={handleAccountRedirect}
-                                disabled={isLoadingAuth}
-                                leftIcon={isLoadingAuth ? undefined : <UserAccountIcon className="w-5 h-5 text-gray-600 dark:text-gray-300" />}
-                                className="cursor-pointer w-full justify-start text-base font-medium text-gray-700 dark:text-gray-200 py-2 px-3 hover:!bg-gray-100 dark:hover:!bg-slate-700 hover:!text-blue-600 dark:hover:!text-sky-400 rounded-md"
-                            >
-                                {isLoadingAuth ? "Loading..." : (firebaseUser ? "My Account / Dashboard" : "Login / Sign Up")}
-                            </Button>
-                        </div>
-                    </div>
-                </div>
+            <Link href="/pricing" className={desktopNavLinkStyles(pathname === "/pricing")}>
+              Pricing
+            </Link>
+            <a href="/#about" onClick={handleSectionClick("about")} className={desktopNavLinkStyles(false)}>
+              About
+            </a>
+            <a href="/#faq" onClick={handleSectionClick("faq")} className={desktopNavLinkStyles(false)}>
+              FAQ
+            </a>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {firebaseUser && role && <RoleBadge role={role} />}
+          <ThemeToggleButton />
+          {!firebaseUser && !isLoadingAuth && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => router.push("/auth/login")}
+              className="hidden sm:inline-flex"
+              leftIcon={<Zap className="h-4 w-4" />}
+            >
+              Sign in
+            </Button>
+          )}
+          {firebaseUser && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleAccountRedirect}
+              disabled={isLoadingAuth}
+              aria-label="Open dashboard"
+            >
+              <UserAccountIcon className="h-6 w-6" />
+            </Button>
+          )}
+          <div className="md:hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              aria-label="Toggle mobile menu"
+            >
+              <MobileMenuIcon className="h-6 w-6" />
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile menu */}
+      {isMenuOpen && (
+        <div className="md:hidden bg-white dark:bg-slate-800 w-full absolute left-0 top-full shadow-lg border-t border-gray-200 dark:border-slate-700">
+          <div className="flex flex-col p-4 space-y-1">
+            <Link
+              href="/"
+              className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700"
+              onClick={() => setIsMenuOpen(false)}
+            >
+              Home
+            </Link>
+            <Button
+              variant="ghost"
+              onClick={() => setIsMobileDropdownOpen(!isMobileDropdownOpen)}
+              rightIcon={
+                <ChevronDown
+                  className={clsx("transition-transform", { "rotate-180": isMobileDropdownOpen })}
+                  size={18}
+                />
+              }
+              className="cursor-pointer text-left text-base font-medium text-gray-700 dark:text-gray-200 py-2 px-3 hover:!bg-gray-100 dark:hover:!bg-slate-700 rounded-md"
+            >
+              Services
+            </Button>
+            {isMobileDropdownOpen && (
+              <div className="ml-4 mt-1 pt-1 border-l border-gray-200 dark:border-slate-700 pl-3 flex flex-col">
+                {SERVICE_LINKS.map((s) => (
+                  <Link
+                    key={s.href}
+                    href={s.href}
+                    className="block px-3 py-2 rounded-md text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700"
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    {s.label}
+                  </Link>
+                ))}
+              </div>
             )}
-        </nav>
-    );
+            <Link
+              href="/pricing"
+              className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700"
+              onClick={() => setIsMenuOpen(false)}
+            >
+              Pricing
+            </Link>
+            <a
+              href="/#about"
+              onClick={(e) => handleSectionClick("about")(e)}
+              className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700"
+            >
+              About
+            </a>
+            <a
+              href="/#faq"
+              onClick={(e) => handleSectionClick("faq")(e)}
+              className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700"
+            >
+              FAQ
+            </a>
+            <div className="pt-3 mt-2 border-t border-gray-200 dark:border-slate-700 flex items-center gap-2">
+              {firebaseUser && role && <RoleBadge role={role} />}
+              <Button
+                variant="ghost"
+                onClick={handleAccountRedirect}
+                disabled={isLoadingAuth}
+                leftIcon={<UserAccountIcon className="w-5 h-5" />}
+                className="cursor-pointer flex-1 justify-start text-base font-medium"
+              >
+                {isLoadingAuth ? "Loading..." : firebaseUser ? "Dashboard" : "Sign in"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </nav>
+  );
 }
