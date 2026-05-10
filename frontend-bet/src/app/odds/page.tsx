@@ -1,13 +1,37 @@
 "use client";
 
-import React, { useState } from 'react';
-import { RefreshCw, TrendingUp } from 'lucide-react';
+import React, { Suspense, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { Activity, Loader2, Plus, RefreshCw, TrendingUp, Users } from 'lucide-react';
+
 import OddsMatchSelector from '@/components/odds/OddsMatchSelector';
 import OddsSummaryChart from '@/components/odds/OddsSummaryChart';
+import { useAuth } from '@/contexts/AuthContext';
 import { useTrackedMatches, useOddsSummary } from '@/hooks/useOddsSummary';
 
+// useSearchParams() forces a CSR bailout in Next 15, so the component that
+// reads the query string must be wrapped in <Suspense>. Default-export keeps
+// the wrapper so the route entrypoint shape stays unchanged.
 export default function OddsPage() {
-  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <Loader2 className="h-8 w-8 animate-spin text-sky-500" />
+        </div>
+      }
+    >
+      <OddsPageContent />
+    </Suspense>
+  );
+}
+
+function OddsPageContent() {
+  const searchParams = useSearchParams();
+  const initialMatch = searchParams.get('match');
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(initialMatch);
+  const { customUserProfile } = useAuth();
 
   const {
     matches,
@@ -15,6 +39,22 @@ export default function OddsPage() {
     error: matchesError,
     refetch: refetchMatches,
   } = useTrackedMatches();
+
+  // If we landed here from /track with ?match=..., make sure that match is
+  // visible in the selector even if useTrackedMatches hasn't loaded yet.
+  useEffect(() => {
+    if (initialMatch) setSelectedMatchId(initialMatch);
+  }, [initialMatch]);
+
+  // Active tracker count = matches with job_active === true.
+  const activeTrackerCount = matches.filter((m) => m.job_active).length;
+  const concurrentLimit = customUserProfile?.quotas.concurrent_tracker_limit ?? 1;
+  const concurrentLabel = concurrentLimit === -1 ? '∞' : `${concurrentLimit}`;
+  const dailyTrackLimit = customUserProfile?.quotas.daily_track_limit ?? 1;
+  const dailyTrackLabel = dailyTrackLimit === -1 ? '∞' : `${dailyTrackLimit}`;
+  const pollMinutes = customUserProfile
+    ? Math.round(customUserProfile.quotas.track_poll_interval_seconds / 60)
+    : 45;
 
   const {
     data: oddsSummary,
@@ -24,16 +64,45 @@ export default function OddsPage() {
   } = useOddsSummary(selectedMatchId);
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-100 dark:bg-slate-900 font-sans">
-      <main className="flex-grow container mx-auto px-4 py-8 md:py-12 max-w-6xl">
+    <div className="bg-gray-50 dark:bg-slate-950 font-sans">
+      <div className="container mx-auto px-4 py-8 md:py-12 max-w-6xl">
         {/* Header */}
-        <header className="text-center mb-10">
-          <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 dark:from-sky-400 dark:via-blue-400 dark:to-indigo-400 pb-2">
-            Odds Tracker
-          </h1>
-          <p className="text-lg text-gray-600 dark:text-gray-300 mt-3 max-w-2xl mx-auto">
-            Monitor odds movement over time and compare with sharp bookmaker lines to find value.
-          </p>
+        <header className="mb-8">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 dark:text-gray-50">
+                Odds Tracker
+              </h1>
+              <p className="text-base text-gray-600 dark:text-gray-300 mt-2 max-w-2xl">
+                Monitor live odds movement and compare with sharp bookmaker lines to find value.
+              </p>
+            </div>
+            <Link
+              href="/track"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white font-semibold shadow-md hover:shadow-lg transition-all duration-200"
+            >
+              <Plus className="h-4 w-4" />
+              Track new match
+            </Link>
+          </div>
+
+          {/* Quota pills */}
+          {customUserProfile && (
+            <div className="mt-6 flex flex-wrap items-center gap-2 text-sm">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 text-gray-700 dark:text-gray-200">
+                <Users className="h-3.5 w-3.5 text-sky-500" />
+                Active <span className="font-semibold">{activeTrackerCount}/{concurrentLabel}</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 text-gray-700 dark:text-gray-200">
+                <Activity className="h-3.5 w-3.5 text-emerald-500" />
+                Daily limit <span className="font-semibold">{dailyTrackLabel}</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 text-gray-700 dark:text-gray-200">
+                <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
+                Polling every <span className="font-semibold">{pollMinutes} min</span>
+              </span>
+            </div>
+          )}
         </header>
 
         {/* Match selection */}
@@ -145,7 +214,25 @@ export default function OddsPage() {
             <p className="text-sm mt-1">to view its odds movement chart</p>
           </div>
         )}
-      </main>
+
+        {/* Empty state when there are no matches at all */}
+        {!matchesLoading && matches.length === 0 && !matchesError && (
+          <div className="text-center py-16 bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700">
+            <TrendingUp className="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600 mb-4" />
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1">No tracked matches yet</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-md mx-auto">
+              Start tracking a match to see live odds movement and sharp bookmaker comparisons.
+            </p>
+            <Link
+              href="/track"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white font-semibold shadow-md transition-all"
+            >
+              <Plus className="h-4 w-4" />
+              Track your first match
+            </Link>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

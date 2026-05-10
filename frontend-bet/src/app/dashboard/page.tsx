@@ -153,7 +153,7 @@ export default function DashboardPage() {
               </div>
               <div className="mt-6"> {/* Added margin top for spacing */}
                 <button
-                    onClick={() => router.push('/arbitrage-scanner')} // Make sure '/arbitrage-scanner' is your target route
+                    onClick={() => router.push('/arbitrage')}
                     className="w-full bg-purple-600 hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-800 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:shadow-lg transition-all duration-300 ease-in-out transform hover:scale-105 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
                 >
                   <Search className="h-5 w-5 mr-2"/> {/* Search icon on the button */}
