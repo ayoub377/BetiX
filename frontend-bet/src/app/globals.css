@@ -1,1 +1,7 @@
 @import "tailwindcss";
+
+/* Tailwind v4 defaults dark: to the prefers-color-scheme media query, which
+   means the in-app theme toggle has no effect (CSS doesn't see class changes).
+   This custom variant rebinds dark: to a class on any ancestor, so next-themes
+   setting <html class="dark"> actually flips the palette. */
+@custom-variant dark (&:where(.dark, .dark *));

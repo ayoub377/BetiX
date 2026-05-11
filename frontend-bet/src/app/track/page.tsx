@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, AlertTriangle, Clock, Loader2, Lock, Sparkles, Users } from "lucide-react";
+import { Activity, AlertTriangle, Clock, Info, Loader2, Lock, Sparkles, Users } from "lucide-react";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { apiClient, isApiError } from "@/lib/apiClient";
@@ -157,6 +157,18 @@ export default function TrackPage() {
           label="Kickoff lookahead"
           value={lookaheadHours === Infinity ? "Unlimited" : `${lookaheadHours}h`}
         />
+      </div>
+
+      {/* ─── How it works ───────────────────────────────────────── */}
+      <div className="mb-6 bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-800/40 text-sky-900 dark:text-sky-200 rounded-lg p-4 flex items-start gap-3 text-sm">
+        <Info className="h-5 w-5 mt-0.5 flex-shrink-0 text-sky-600 dark:text-sky-400" />
+        <div>
+          <p className="font-medium mb-1">Just the team name is enough.</p>
+          <p className="text-sky-800 dark:text-sky-300/90 leading-relaxed">
+            We look up the next upcoming fixture on FlashScore, then automatically match it to the
+            right league and odds feed in the background. No need to pick a league or competition.
+          </p>
+        </div>
       </div>
 
       {/* ─── Form ────────────────────────────────────────────────── */}

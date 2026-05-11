@@ -1,299 +1,352 @@
 // src/app/dashboard/page.tsx
 "use client";
 
-import React, { useState, useEffect } from 'react'; // Removed useCallback as local handleLogout is removed
-import { useRouter } from 'next/navigation';
+import React, { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
-  Sun,
-  Moon,
-  // LogOut, // LogoutButton imports its own icon
-  UserCircle,
-  Zap,
-  AlertTriangle,
+  Activity,
+  ArrowRight,
   BarChart3,
+  Brain,
+  CreditCard,
+  Loader2,
+  LogOut,
   ShieldCheck,
-  TrendingUp,
-  // Settings, // You can add a settings card if needed
-  Bell, Search,
-} from 'lucide-react';
-import LogoutButton from "@/components/ui/LogoutButton"; // Assuming this is your reusable logout button
-import { useAuth } from '@/contexts/AuthContext'; // Import your AuthContext hook
-import { apiClient, isApiError } from '@/lib/apiClient';
+  Sparkles,
+  Trophy,
+  Zap,
+} from "lucide-react";
 
-// Fallback only — real limit comes from `quotas.daily_compare_limit` returned by /api/users/me.
-const FALLBACK_NORMAL_LIMIT = 5;
+import { useAuth } from "@/contexts/AuthContext";
+import { apiClient, isApiError } from "@/lib/apiClient";
+import LogoutButton from "@/components/ui/LogoutButton";
+
+const QUICK_ACTIONS = [
+  {
+    href: "/track",
+    icon: Activity,
+    title: "Track a match",
+    description: "Pin a fixture and watch its odds drift in real time.",
+    accent: "from-sky-500 to-indigo-600",
+    iconBg: "bg-sky-50 dark:bg-sky-900/30 text-sky-600 dark:text-sky-400",
+  },
+  {
+    href: "/predictions",
+    icon: Brain,
+    title: "Predict an outcome",
+    description: "Dixon-Coles probabilities for any fixture.",
+    accent: "from-emerald-500 to-teal-600",
+    iconBg: "bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400",
+  },
+  {
+    href: "/pro-analysis",
+    icon: Trophy,
+    title: "Compare lineups",
+    description: "Side-by-side player comparison by position.",
+    accent: "from-amber-500 to-orange-600",
+    iconBg: "bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400",
+  },
+];
 
 export default function DashboardPage() {
   const router = useRouter();
-  // Get user data and auth state from AuthContext
-  const {
-    firebaseUser,
-    customUserProfile,
-    isLoadingAuth,
-    requestsLeftToday, // Renamed from 'requestsLeft' for clarity
-    nextQuotaResetTimeDisplay,
-    refreshUserProfile // Optional: if you want a manual refresh button
-  } = useAuth();
-
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const { firebaseUser, customUserProfile, isLoadingAuth } = useAuth();
   const [isOpeningPortal, setIsOpeningPortal] = useState(false);
   const [billingError, setBillingError] = useState<string | null>(null);
-  // isLoading state from context (isLoadingAuth) will handle initial page load.
-  // Local isLoading can be used for other specific actions if needed.
 
-  // Effect for initial auth check and redirection if not logged in
+  // Redirect when not authed
   useEffect(() => {
     if (!isLoadingAuth && !firebaseUser) {
-      console.log("Dashboard: User not authenticated, redirecting to login.");
-      router.push('/auth/login');
+      router.push("/auth/login");
     }
   }, [isLoadingAuth, firebaseUser, router]);
 
-  // Theme management effects (can remain as they are)
-  useEffect(() => {
-    const storedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
-    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    if (storedTheme) {
-      setTheme(storedTheme);
-    } else {
-      setTheme(systemPrefersDark ? 'dark' : 'light');
-    }
-  }, []); // Runs once on mount to load theme preference
-
-  useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-    localStorage.setItem('theme', theme);
-  }, [theme]); // Runs when theme state changes
-
-  const toggleTheme = () => {
-    setTheme((prevTheme) => (prevTheme === 'light' ? 'dark' : 'light'));
-  };
+  const role = customUserProfile?.role ?? "normal";
+  const isPremium = role === "premium";
+  const isAdmin = role === "admin";
+  const quotas = customUserProfile?.quotas;
 
   const handleManageBilling = async () => {
     setIsOpeningPortal(true);
     setBillingError(null);
     try {
-      const res = await apiClient.post<{ url: string }>('/billing/portal');
+      const res = await apiClient.post<{ url: string }>("/billing/portal");
       window.location.assign(res.data.url);
     } catch (err) {
-      console.error('Portal open failed:', err);
+      console.error("Portal open failed:", err);
       if (isApiError(err) && err.response) {
         const detail = (err.response.data as { detail?: string })?.detail;
-        setBillingError(detail ?? 'Could not open billing portal.');
+        setBillingError(detail ?? "Could not open billing portal.");
       } else {
-        setBillingError('Could not open billing portal.');
+        setBillingError("Could not open billing portal.");
       }
       setIsOpeningPortal(false);
     }
   };
 
-  // The LogoutButton component now handles its own logout logic.
-  // The local handleLogout function is no longer needed if the top header is removed
-  // and replaced by the LogoutButton component.
-
-  // Show loading state while AuthContext is verifying authentication
-  if (isLoadingAuth || (firebaseUser && !customUserProfile && !isLoadingAuth)) {
-    // Also show loading if firebaseUser is present but customUserProfile hasn't loaded yet
-    // (and initial auth check is done)
+  if (isLoadingAuth || (firebaseUser && !customUserProfile)) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
-        <div className="flex flex-col items-center">
-          <BarChart3 className="h-12 w-12 text-blue-600 dark:text-blue-400 animate-pulse mb-4" />
-          <div className="text-xl font-semibold text-gray-700 dark:text-gray-300">
-            {isLoadingAuth ? "Authenticating..." : "Loading User Profile..."}
-          </div>
-        </div>
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="h-10 w-10 animate-spin text-sky-500" />
       </div>
     );
   }
 
-  // If after loading, there's no Firebase user, it means redirection should occur or user is not logged in.
-  // The useEffect above handles redirection. This is a fallback or for brief moments before redirect.
   if (!firebaseUser) {
     return (
-        <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
-            <div className="text-xl font-semibold text-gray-700 dark:text-gray-300">
-                Redirecting to login...
-            </div>
-        </div>
+      <div className="flex items-center justify-center min-h-[60vh] text-gray-500 dark:text-gray-400">
+        Redirecting to login…
+      </div>
     );
   }
 
-  // At this point, firebaseUser exists. We can use customUserProfile if available, or fallback to firebaseUser info.
-  const userRole = customUserProfile?.role ?? 'normal';
-  const isUserPremium = customUserProfile?.isPremiumMember || false;
-  const isUserAdmin = userRole === 'admin';
-  const dailyLimit = customUserProfile?.quotas.daily_compare_limit ?? FALLBACK_NORMAL_LIMIT;
-  const currentRequestsLeft = customUserProfile ? requestsLeftToday : 0; // Use requestsLeftToday from context
-  const userDisplayName = customUserProfile?.displayName || firebaseUser.displayName || "User";
-  // const userEmail = customUserProfile?.email || firebaseUser.email;
-  // const avatarUrl = customUserProfile?.avatarUrl || firebaseUser.photoURL;
+  const userName =
+    customUserProfile?.displayName?.split(" ")[0] ||
+    firebaseUser.displayName?.split(" ")[0] ||
+    firebaseUser.email?.split("@")[0] ||
+    "there";
+
+  const formatLimit = (n: number | undefined) =>
+    n === undefined ? "—" : n === -1 ? "Unlimited" : `${n}`;
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-100 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-300">
-      {/* If you have a global Navbar component, it would go here.
-          It could also use useAuth() to display user info, theme toggle, and logout.
-          For now, this page is standalone post-login.
-      */}
-      <main className="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {/* Card 1: Welcome/Stats */}
-            <div
-                className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-2xl transition-shadow duration-300 ease-in-out">
-              <div className="flex items-center space-x-4 mb-4">
-                <Zap className="h-10 w-10 text-purple-500 dark:text-purple-400"/> {/* Using Zap icon */}
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Arbitrage Scanner</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Find market arbitrage opportunities.</p>
-                </div>
-              </div>
-              <div className="mt-6"> {/* Added margin top for spacing */}
-                <button
-                    onClick={() => router.push('/arbitrage')}
-                    className="w-full bg-purple-600 hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-800 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:shadow-lg transition-all duration-300 ease-in-out transform hover:scale-105 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
-                >
-                  <Search className="h-5 w-5 mr-2"/> {/* Search icon on the button */}
-                  Scan for Opportunities
-                </button>
-              </div>
-            </div>
+    <div className="container mx-auto px-4 py-8 md:py-12 max-w-6xl space-y-8">
+      {/* ─── Hero greeting ──────────────────────────────────────── */}
+      <section className="bg-gradient-to-br from-white to-sky-50 dark:from-slate-800 dark:to-sky-950/30 border border-gray-200 dark:border-slate-700 rounded-2xl p-6 md:p-8 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Welcome back</p>
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-gray-50 flex items-center gap-3">
+              {userName}
+              <RolePill role={role} />
+            </h1>
+            <p className="text-gray-600 dark:text-gray-400 mt-2 max-w-lg">
+              {isAdmin
+                ? "Full operational access — every endpoint, no quotas."
+                : isPremium
+                ? "Thanks for being Premium. Your quotas and faster polling are active."
+                : "You're on the Free tier. Upgrade anytime for more daily requests and faster polling."}
+            </p>
+          </div>
+          {!isPremium && !isAdmin && (
+            <Link
+              href="/pricing"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white font-semibold shadow-md hover:shadow-lg transition-all duration-200"
+            >
+              <Zap className="h-4 w-4" />
+              Upgrade to Premium
+            </Link>
+          )}
+        </div>
+      </section>
 
-          {/* Card 2: User Status / Requests Left */}
-          <div
-              className={`p-6 rounded-xl shadow-lg hover:shadow-2xl transition-shadow duration-300 ease-in-out ${isUserPremium ? 'bg-gradient-to-br from-green-50 to-emerald-100 dark:from-green-800/30 dark:to-emerald-900/40' : 'bg-gradient-to-br from-yellow-50 to-amber-100 dark:from-yellow-800/30 dark:to-amber-900/40'}`}>
-            <div className="flex items-center space-x-4 mb-4">
-              {isUserPremium ? (
-                  <ShieldCheck className="h-10 w-10 text-green-600 dark:text-green-400"/>
-              ) : (
-                  <AlertTriangle className="h-10 w-10 text-yellow-600 dark:text-yellow-400"/>
-              )}
-              <div>
-                <h2 className="text-xl font-semibold text-gray-800 dark:text-white">
-                  {isUserAdmin ? 'Admin Account' : isUserPremium ? 'Premium Account' : 'Standard Account'}
-                </h2>
-                {isUserPremium ? (
-                  <p className="text-sm text-green-700 dark:text-green-300">
-                    {isUserAdmin ? 'Full admin access — all features unlocked.' : 'Enjoy expanded analysis requests and tracking.'}
-                  </p>
-                ) : (
-                  customUserProfile && ( // Ensure profile is loaded before displaying request info
-                    <>
-                      <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                        Daily Analysis Requests: <span className="font-bold">{currentRequestsLeft < 0 ? 0 : currentRequestsLeft} / {dailyLimit}</span> left.
-                      </p>
-                      {nextQuotaResetTimeDisplay && (
-                        <p className="text-xs text-yellow-600 dark:text-yellow-200 mt-1">
-                          Resets {nextQuotaResetTimeDisplay}.
-                        </p>
-                      )}
-                    </>
-                  )
-                )}
-              </div>
-            </div>
-            {!isUserPremium && (
-              <button
-                onClick={() => router.push('/pricing')}
-                className="mt-4 w-full bg-gradient-to-r from-purple-500 via-pink-500 to-red-500 hover:from-purple-600 hover:via-pink-600 hover:to-red-600 text-white font-semibold py-3 px-4 rounded-lg shadow-md hover:shadow-lg transition-all duration-300 ease-in-out transform hover:scale-105 flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
+      {/* ─── Quick actions ──────────────────────────────────────── */}
+      <section>
+        <h2 className="text-xs font-semibold tracking-wider uppercase text-gray-500 dark:text-gray-400 mb-3">
+          Quick actions
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {QUICK_ACTIONS.map((action) => {
+            const Icon = action.icon;
+            return (
+              <Link
+                key={action.href}
+                href={action.href}
+                className="group relative bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 p-6 hover:border-transparent hover:shadow-xl transition-all duration-300 overflow-hidden"
               >
-                <Zap className="h-5 w-5 mr-2" /> Upgrade to Premium
-              </button>
-            )}
-            {/* Premium (non-admin) users get a "Manage billing" link that
-                opens the LemonSqueezy customer portal — for changing payment
-                method, downloading invoices, or cancelling. */}
-            {customUserProfile?.role === 'premium' && (
+                <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${action.accent}`} />
+                <div className={`inline-flex h-11 w-11 rounded-xl items-center justify-center mb-4 ${action.iconBg}`}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-gray-50 mb-1 flex items-center gap-2">
+                  {action.title}
+                  <ArrowRight className="h-3.5 w-3.5 text-gray-400 group-hover:text-sky-500 group-hover:translate-x-1 transition-all" />
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
+                  {action.description}
+                </p>
+              </Link>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ─── Plan + Limits grid ─────────────────────────────────── */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Plan card */}
+        <div className="lg:col-span-1 bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 p-6 flex flex-col">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xs font-semibold tracking-wider uppercase text-gray-500 dark:text-gray-400">
+              Your plan
+            </h2>
+            <RolePill role={role} compact />
+          </div>
+          <div className="flex-1">
+            <p className="text-2xl font-bold text-gray-900 dark:text-gray-50 mb-1">
+              {isAdmin ? "Admin" : isPremium ? "Premium" : "Free"}
+            </p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+              {isAdmin
+                ? "Operational access"
+                : isPremium
+                ? "$19 / month"
+                : "Always free"}
+            </p>
+          </div>
+          {isPremium && (
+            <>
               <button
                 onClick={handleManageBilling}
                 disabled={isOpeningPortal}
-                className="mt-4 w-full py-2.5 px-4 rounded-lg bg-white dark:bg-slate-700 border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-600 text-sm font-medium transition-colors disabled:opacity-60"
+                className="w-full py-2.5 px-4 rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-700 text-sm font-medium transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
               >
-                {isOpeningPortal ? 'Opening portal…' : 'Manage billing'}
+                <CreditCard className="h-4 w-4" />
+                {isOpeningPortal ? "Opening portal…" : "Manage billing"}
               </button>
-            )}
-            {billingError && (
-              <p className="mt-2 text-xs text-red-600 dark:text-red-400 text-center">
-                {billingError}
-              </p>
-            )}
-            {customUserProfile && !isUserPremium && refreshUserProfile && (
-                 <button
-                    onClick={async () => { await refreshUserProfile(); }}
-                    className="mt-2 w-full text-xs text-blue-600 dark:text-sky-400 hover:underline"
-                >
-                    Refresh Quota Status
-                </button>
-            )}
-          </div>
-
-          {/* Card 3: Notifications */}
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-2xl transition-shadow duration-300 ease-in-out">
-            <div className="flex items-center space-x-4 mb-4">
-              <Bell className="h-10 w-10 text-blue-500 dark:text-blue-400" />
-              <div>
-                <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Notifications</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Recent alerts and updates.</p>
-              </div>
-            </div>
-            <div className="space-y-3">
-                <p className="text-sm text-gray-700 dark:text-gray-300">📢 Welcome to your dashboard!</p>
-                {/* Add more notifications here */}
-            </div>
-          </div>
-
-          {/* Card 4: Pro Analysis Link (Conditional or always show) */}
-          {/* You might always show this and let the ProAnalysisPage handle its own guarding */}
-          <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-2xl transition-shadow duration-300 ease-in-out md:col-span-1 lg:col-span-1">
-            <div className="flex items-center space-x-4 mb-4">
-              <Zap className="h-10 w-10 text-purple-500 dark:text-purple-400" />
-              <div>
-                <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Team Analysis</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Compare professional teams.</p>
-              </div>
-            </div>
-            <button
-              onClick={() => router.push('/pro-analysis')}
-              className="mt-4 w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors duration-300 ease-in-out shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800"
+              {billingError && (
+                <p className="mt-2 text-xs text-red-600 dark:text-red-400">{billingError}</p>
+              )}
+            </>
+          )}
+          {!isPremium && !isAdmin && (
+            <Link
+              href="/pricing"
+              className="w-full py-2.5 px-4 rounded-lg bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white text-sm font-semibold flex items-center justify-center gap-2 shadow-sm hover:shadow-md transition-all"
             >
-              Go to Analysis
-            </button>
-          </div>
+              <Zap className="h-4 w-4" />
+              Upgrade
+            </Link>
+          )}
+        </div>
 
-          {/* Logout Button Card/Item - using the classes you provided for it */}
-          <div className="bg-white dark:bg-gray-800 p-3 rounded-xl shadow-lg hover:shadow-2xl transition-shadow duration-300 ease-in-out flex items-center justify-center">
-            <LogoutButton
-              showText={true}
-              text="Sign Out"
-              className="flex items-center w-auto p-2 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-700/50 rounded-md !ring-0 !focus:ring-0" // Adjusted classes
-              iconClassName="h-5 w-5 mr-2"
+        {/* Limits grid */}
+        <div className="lg:col-span-2 bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 p-6">
+          <h2 className="text-xs font-semibold tracking-wider uppercase text-gray-500 dark:text-gray-400 mb-4">
+            Your limits
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <LimitStat
+              icon={<Trophy className="h-4 w-4" />}
+              label="Daily comparisons"
+              value={formatLimit(quotas?.daily_compare_limit)}
+            />
+            <LimitStat
+              icon={<Brain className="h-4 w-4" />}
+              label="Daily predictions"
+              value={formatLimit(quotas?.daily_predict_limit)}
+            />
+            <LimitStat
+              icon={<Activity className="h-4 w-4" />}
+              label="Daily new tracks"
+              value={formatLimit(quotas?.daily_track_limit)}
+            />
+            <LimitStat
+              icon={<BarChart3 className="h-4 w-4" />}
+              label="Concurrent trackers"
+              value={formatLimit(quotas?.concurrent_tracker_limit)}
+            />
+            <LimitStat
+              icon={<Sparkles className="h-4 w-4" />}
+              label="Poll cadence"
+              value={
+                quotas
+                  ? `${Math.round(quotas.track_poll_interval_seconds / 60)} min`
+                  : "—"
+              }
+            />
+            <LimitStat
+              icon={<ShieldCheck className="h-4 w-4" />}
+              label="Kickoff window"
+              value={
+                quotas
+                  ? quotas.track_kickoff_lookahead_seconds === -1
+                    ? "Unlimited"
+                    : `${Math.round(quotas.track_kickoff_lookahead_seconds / 3600)}h`
+                  : "—"
+              }
             />
           </div>
-
-           {/* Card 6: Quick Actions (Example for more content) */}
-           <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-lg hover:shadow-2xl transition-shadow duration-300 ease-in-out md:col-span-2 lg:col-span-1">
-            <div className="flex items-center space-x-4 mb-4">
-              <BarChart3 className="h-10 w-10 text-indigo-500 dark:text-indigo-400" />
-              <div>
-                <h2 className="text-xl font-semibold text-gray-800 dark:text-white">Quick Actions</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Start a new analysis or report.</p>
-              </div>
-            </div>
-            <div className="space-y-3">
-              <button
-                onClick={() => router.push('/pro-analysis')}
-                className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors duration-300 ease-in-out"
-              >
-                New Team Analysis
-              </button>
-              {/* <button className="w-full bg-sky-500 hover:bg-sky-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors duration-300 ease-in-out">Generate Monthly Report</button> */}
-            </div>
-          </div>
         </div>
-      </main>
+      </section>
+
+      {/* ─── Account ────────────────────────────────────────────── */}
+      <section className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-200 dark:border-slate-700 p-6">
+        <h2 className="text-xs font-semibold tracking-wider uppercase text-gray-500 dark:text-gray-400 mb-4">
+          Account
+        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm text-gray-500 dark:text-gray-400">Signed in as</p>
+            <p className="font-medium text-gray-900 dark:text-gray-50 truncate">
+              {firebaseUser.email}
+            </p>
+          </div>
+          <LogoutButton
+            showText
+            text="Sign out"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+            iconClassName="h-4 w-4"
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function RolePill({ role, compact }: { role: "normal" | "premium" | "admin"; compact?: boolean }) {
+  const config: Record<typeof role, { label: string; icon: React.ReactNode; className: string }> = {
+    normal: {
+      label: "Free",
+      icon: null,
+      className: "bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-gray-300 border border-gray-200 dark:border-slate-600",
+    },
+    premium: {
+      label: "Premium",
+      icon: <Sparkles className="h-3 w-3" />,
+      className: "bg-gradient-to-r from-sky-500 to-indigo-600 text-white",
+    },
+    admin: {
+      label: "Admin",
+      icon: <ShieldCheck className="h-3 w-3" />,
+      className: "bg-gradient-to-r from-amber-500 to-rose-500 text-white",
+    },
+  };
+  const c = config[role];
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold ${
+        compact ? "text-[10px]" : "text-xs"
+      } ${c.className}`}
+    >
+      {c.icon}
+      {c.label}
+    </span>
+  );
+}
+
+function LimitStat({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-50 dark:bg-slate-700/40 border border-gray-100 dark:border-slate-700">
+      <div className="flex-shrink-0 h-8 w-8 rounded-md bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 flex items-center justify-center text-gray-500 dark:text-gray-400">
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="text-xs text-gray-500 dark:text-gray-400 mb-0.5">{label}</div>
+        <div className="text-sm font-semibold text-gray-900 dark:text-gray-50 truncate">
+          {value}
+        </div>
+      </div>
     </div>
   );
 }

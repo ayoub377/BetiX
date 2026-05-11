@@ -22,7 +22,6 @@ const SERVICE_LINKS = [
   { href: "/odds", label: "Odds Tracker", description: "Live odds movement charts" },
   { href: "/pro-analysis", label: "Lineup Comparison", description: "Compare team rosters by position" },
   { href: "/predictions", label: "Match Predictions", description: "Dixon-Coles outcome probabilities" },
-  // { href: "/arbitrage", label: "Arbitrage", description: "Risk-free opportunities across books" },
 ];
 
 interface RoleBadgeProps {

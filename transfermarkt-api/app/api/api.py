@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from firebase_admin import firestore
 from app.models.users import WaitlistEmail
-from app.api.endpoints import billing, clubs, competitions, players, odds, arbitrage, predictions, users
+from app.api.endpoints import billing, clubs, competitions, players, odds, predictions, users
 
 api_router = APIRouter()
 
@@ -16,9 +16,6 @@ api_router.include_router(competitions.router, prefix="/competitions", tags=["co
 api_router.include_router(clubs.router, prefix="/clubs", tags=["clubs"])
 api_router.include_router(players.router, prefix="/players", tags=["players"])
 api_router.include_router(odds.router, prefix="/odds", tags=["odds"])
-
-#arbitrage
-api_router.include_router(arbitrage.router, prefix="/arbitrage", tags=["arbitrage"])
 
 #predictions
 api_router.include_router(predictions.router, prefix="/predictions", tags=["Dixon-Coles Predictions"])
