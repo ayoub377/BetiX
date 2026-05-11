@@ -8,7 +8,6 @@ import {
   BarChart3,
   Brain,
   Sparkles,
-  TrendingUp,
   Trophy,
   Zap,
 } from "lucide-react";
@@ -40,14 +39,6 @@ const FEATURES = [
     description:
       "Side-by-side player comparison by position. Spot value where the market is mispricing squad strength.",
     accent: "from-amber-500 to-orange-600",
-  },
-  {
-    href: "/arbitrage",
-    icon: TrendingUp,
-    title: "Arbitrage Discovery",
-    description:
-      "Surface risk-free betting opportunities across bookmakers. Filter by region, sport, and minimum margin.",
-    accent: "from-fuchsia-500 to-pink-600",
   },
 ];
 
@@ -157,7 +148,7 @@ export default function HomePage() {
               need on the same page.
             </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 lg:gap-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 lg:gap-8">
             {FEATURES.map((feature) => {
               const Icon = feature.icon;
               return (

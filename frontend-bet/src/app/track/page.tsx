@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, AlertTriangle, Clock, Loader2, Lock, Sparkles, Users } from "lucide-react";
+import { Activity, AlertTriangle, Clock, Info, Loader2, Lock, Sparkles, Target, Users } from "lucide-react";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { apiClient, isApiError } from "@/lib/apiClient";
+import { groupedLeaguesFor } from "@/lib/leagues";
 
 type Sport = "football" | "tennis";
 
@@ -38,9 +39,22 @@ export default function TrackPage() {
   const [sport, setSport] = useState<Sport>("football");
   const [name, setName] = useState("");
   const [matchId, setMatchId] = useState("");
+  // Empty string = "Auto-detect" (the default). When the user picks a
+  // specific competition we forward it as ``sport_key`` to /odds/track
+  // and the backend skips the multi-league fan-out lookup.
+  const [sportKey, setSportKey] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [errorKind, setErrorKind] = useState<"quota" | "kickoff" | "auth" | "other" | null>(null);
+
+  // Football leagues and tennis tournaments don't overlap, so reset the
+  // competition picker when the sport changes.
+  useEffect(() => {
+    setSportKey("");
+  }, [sport]);
+
+  const groupedLeagues = useMemo(() => groupedLeaguesFor(sport), [sport]);
+  const competitionLabel = sport === "football" ? "Competition" : "Tournament";
 
   // Redirect to login if user clearly isn't authed.
   useEffect(() => {
@@ -82,6 +96,9 @@ export default function TrackPage() {
         if (trimmedName) body.player_name = trimmedName;
       }
       if (trimmedMatchId) body.match_id = trimmedMatchId;
+      // Skip backend's multi-league fan-out lookup when the bettor has
+      // told us exactly which competition to search.
+      if (sportKey) body.sport_key = sportKey;
 
       const res = await apiClient.post<TrackResponse>("/odds/track", body);
       // Send the user to the Odds page with the new match selected.
@@ -159,6 +176,20 @@ export default function TrackPage() {
         />
       </div>
 
+      {/* ─── How it works ───────────────────────────────────────── */}
+      <div className="mb-6 bg-sky-50 dark:bg-sky-900/20 border border-sky-200 dark:border-sky-800/40 text-sky-900 dark:text-sky-200 rounded-lg p-4 flex items-start gap-3 text-sm">
+        <Info className="h-5 w-5 mt-0.5 flex-shrink-0 text-sky-600 dark:text-sky-400" />
+        <div>
+          <p className="font-medium mb-1">Team name is enough — but pin the competition for cleaner results.</p>
+          <p className="text-sky-800 dark:text-sky-300/90 leading-relaxed">
+            Leave the competition picker on <em>auto-detect</em> and we'll find the team's next
+            fixture across every league. Picking a specific competition narrows the search to
+            one league — faster, fewer Odds API calls, and avoids picking up the wrong fixture
+            when a team plays in multiple competitions (cup vs. domestic, club vs. national).
+          </p>
+        </div>
+      </div>
+
       {/* ─── Form ────────────────────────────────────────────────── */}
       <form onSubmit={handleSubmit} className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-700 p-6 md:p-8 space-y-6">
         {/* Sport toggle */}
@@ -196,6 +227,50 @@ export default function TrackPage() {
             className="w-full px-4 py-3 border border-gray-300 dark:border-slate-600 rounded-lg shadow-sm focus:ring-2 focus:ring-sky-500 dark:focus:ring-sky-400 focus:border-sky-500 dark:bg-slate-700 dark:text-gray-100 text-base"
           />
           <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{sportConfig.helper}</p>
+        </div>
+
+        {/* Competition picker — optional override of the auto-discovery */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label htmlFor="competition" className="block text-sm font-medium text-gray-700 dark:text-gray-200 flex items-center gap-1.5">
+              <Target className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+              {competitionLabel}
+              <span className="text-gray-400 dark:text-gray-500 font-normal">(optional)</span>
+            </label>
+            {sportKey && (
+              <button
+                type="button"
+                onClick={() => setSportKey("")}
+                className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 underline-offset-2 hover:underline"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <select
+            id="competition"
+            value={sportKey}
+            onChange={(e) => setSportKey(e.target.value)}
+            className="w-full px-4 py-3 border border-gray-300 dark:border-slate-600 rounded-lg shadow-sm focus:ring-2 focus:ring-sky-500 dark:focus:ring-sky-400 focus:border-sky-500 dark:bg-slate-700 dark:text-gray-100 text-base"
+          >
+            <option value="">Auto-detect competition</option>
+            {groupedLeagues.map(({ group, options }) => (
+              <optgroup key={group} label={group}>
+                {options.map((o) => (
+                  <option key={o.sport_key} value={o.sport_key}>
+                    {o.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {sportKey
+              ? "We'll search this competition only — faster, fewer API calls, and avoids cross-competition ambiguity."
+              : sport === "football"
+              ? "Leave on auto-detect to scan every soccer league, or pick the competition you're betting on."
+              : "Pick a Grand Slam if it's running now — otherwise leave on auto-detect."}
+          </p>
         </div>
 
         {/* Optional match ID */}
