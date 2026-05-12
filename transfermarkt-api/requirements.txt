@@ -59,6 +59,7 @@ pyasn1==0.6.1 ; python_version >= "3.12" and python_version < "4.0"
 pycparser==2.22 ; python_version >= "3.12" and python_version < "4.0" and (platform_python_implementation != "PyPy" or os_name == "nt") and (platform_python_implementation != "PyPy" or implementation_name != "pypy")
 pydantic-core==2.27.2 ; python_version >= "3.12" and python_version < "4.0"
 pydantic-settings==2.13.1 ; python_version >= "3.12" and python_version < "4.0"
+python-multipart==0.0.20 ; python_version >= "3.12" and python_version < "4.0"
 pydantic==2.10.6 ; python_version >= "3.12" and python_version < "4.0"
 pyjwt==2.10.1 ; python_version >= "3.12" and python_version < "4.0"
 pyjwt[crypto]==2.10.1 ; python_version >= "3.12" and python_version < "4.0"
