@@ -7,17 +7,31 @@ import { Brain, Loader2, AlertTriangle, Sparkles } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiClient, isApiError } from "@/lib/apiClient";
 
+// Matches the FastAPI PredictionResponse model in app/models/predictions.py.
+// home_team / away_team aren't part of the response — they live on the
+// request, so we merge them in client-side before rendering.
 interface PredictionResponse {
+  lambda_home: number;
+  lambda_away: number;
+  probabilities_1x2: {
+    home_win: number;
+    draw: number;
+    away_win: number;
+  };
+  goal_predictions: {
+    most_likely_score: string;
+    most_likely_score_prob: number;
+    over_2_5_prob: number;
+    under_2_5_prob: number;
+    btts_yes_prob: number;
+    btts_no_prob: number;
+  };
+}
+
+interface RenderablePrediction extends PredictionResponse {
   home_team: string;
   away_team: string;
-  league_name?: string;
-  home_win_probability: number;
-  draw_probability: number;
-  away_win_probability: number;
-  expected_home_goals?: number;
-  expected_away_goals?: number;
-  // Anything else the model returns is preserved but not rendered.
-  [k: string]: unknown;
+  league_name: string;
 }
 
 interface TeamListResponse {
@@ -37,7 +51,7 @@ export default function PredictionsPage() {
   const [home, setHome] = useState<string>("");
   const [away, setAway] = useState<string>("");
 
-  const [prediction, setPrediction] = useState<PredictionResponse | null>(null);
+  const [prediction, setPrediction] = useState<RenderablePrediction | null>(null);
   const [isPredicting, setIsPredicting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -101,7 +115,12 @@ export default function PredictionsPage() {
         home_team: home,
         away_team: away,
       });
-      setPrediction(res.data);
+      setPrediction({
+        ...res.data,
+        home_team: home,
+        away_team: away,
+        league_name: selectedLeague,
+      });
     } catch (err) {
       console.error("Predict failed:", err);
       if (isApiError(err) && err.response) {
@@ -277,21 +296,21 @@ function TeamPicker({
   );
 }
 
-function PredictionResult({ prediction }: { prediction: PredictionResponse }) {
-  const home = clampPct(prediction.home_win_probability);
-  const draw = clampPct(prediction.draw_probability);
-  const away = clampPct(prediction.away_win_probability);
+function PredictionResult({ prediction }: { prediction: RenderablePrediction }) {
+  const home = clampPct(prediction.probabilities_1x2.home_win);
+  const draw = clampPct(prediction.probabilities_1x2.draw);
+  const away = clampPct(prediction.probabilities_1x2.away_win);
   const winner =
     home >= draw && home >= away ? "home" : away >= home && away >= draw ? "away" : "draw";
+
+  const goals = prediction.goal_predictions;
 
   return (
     <div className="mt-8 bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-gray-200 dark:border-slate-700 p-6 md:p-8">
       <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-50 mb-1">
         {prediction.home_team} <span className="text-gray-400">vs</span> {prediction.away_team}
       </h2>
-      {prediction.league_name && (
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{prediction.league_name}</p>
-      )}
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">{prediction.league_name}</p>
 
       <div className="space-y-4">
         <ProbabilityBar
@@ -316,27 +335,44 @@ function PredictionResult({ prediction }: { prediction: PredictionResponse }) {
         />
       </div>
 
-      {(prediction.expected_home_goals !== undefined ||
-        prediction.expected_away_goals !== undefined) && (
-        <div className="mt-6 pt-6 border-t border-gray-100 dark:border-slate-700 grid grid-cols-2 gap-4 text-sm">
-          {prediction.expected_home_goals !== undefined && (
-            <div>
-              <div className="text-gray-500 dark:text-gray-400 mb-1">Expected goals (home)</div>
-              <div className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
-                {prediction.expected_home_goals.toFixed(2)}
-              </div>
-            </div>
-          )}
-          {prediction.expected_away_goals !== undefined && (
-            <div>
-              <div className="text-gray-500 dark:text-gray-400 mb-1">Expected goals (away)</div>
-              <div className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
-                {prediction.expected_away_goals.toFixed(2)}
-              </div>
-            </div>
-          )}
+      <div className="mt-6 pt-6 border-t border-gray-100 dark:border-slate-700 grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <div className="text-gray-500 dark:text-gray-400 mb-1">Expected goals (home)</div>
+          <div className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
+            {prediction.lambda_home.toFixed(2)}
+          </div>
         </div>
-      )}
+        <div>
+          <div className="text-gray-500 dark:text-gray-400 mb-1">Expected goals (away)</div>
+          <div className="text-2xl font-semibold text-gray-900 dark:text-gray-50">
+            {prediction.lambda_away.toFixed(2)}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 pt-6 border-t border-gray-100 dark:border-slate-700 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+        <div>
+          <div className="text-gray-500 dark:text-gray-400 mb-1">Most likely score</div>
+          <div className="text-lg font-semibold text-gray-900 dark:text-gray-50">
+            {goals.most_likely_score}
+            <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">
+              ({(clampPct(goals.most_likely_score_prob) * 100).toFixed(1)}%)
+            </span>
+          </div>
+        </div>
+        <div>
+          <div className="text-gray-500 dark:text-gray-400 mb-1">Over 2.5 goals</div>
+          <div className="text-lg font-semibold text-gray-900 dark:text-gray-50">
+            {(clampPct(goals.over_2_5_prob) * 100).toFixed(1)}%
+          </div>
+        </div>
+        <div>
+          <div className="text-gray-500 dark:text-gray-400 mb-1">Both teams to score</div>
+          <div className="text-lg font-semibold text-gray-900 dark:text-gray-50">
+            {(clampPct(goals.btts_yes_prob) * 100).toFixed(1)}%
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
