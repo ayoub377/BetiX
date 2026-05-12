@@ -52,6 +52,18 @@ def _get_or_create_user(db: Session, decoded_token: dict) -> User:
         if token_email and user.email != token_email:
             user.email = token_email
             db.commit()
+        # Promote (never demote) to admin when the email is on the allowlist.
+        # Lets you add someone to ADMIN_EMAILS after they already have a user
+        # row without dropping into SQL. Removing from the allowlist does NOT
+        # demote — role changes are a DB operation, not an env-var operation.
+        if (
+            user.role != "admin"
+            and user.email
+            and user.email.lower() in _admin_email_allowlist()
+        ):
+            user.role = "admin"
+            db.commit()
+            logger.info("Promoted %s to admin via ADMIN_EMAILS", user.email)
         return user
 
     email = decoded_token.get("email")
