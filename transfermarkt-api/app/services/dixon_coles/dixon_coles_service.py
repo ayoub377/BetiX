@@ -405,8 +405,9 @@ def preprocess_data(df: pd.DataFrame, league_name: str) -> Tuple[pd.DataFrame, D
         raise ValueError(f"No valid rows remaining for {league_name}.")
     df['FTHG'] = df['FTHG'].astype(int)
     df['FTAG'] = df['FTAG'].astype(int)
-    unique_teams_cleaned = pd.concat([df['HomeTeam'], df['AwayTeam']]).unique()
-    unique_teams_cleaned.sort()
+    # pandas 3's .unique() on string columns returns a StringArray (no .sort()).
+    # sorted() works on either StringArray or the legacy ndarray.
+    unique_teams_cleaned = sorted(pd.concat([df['HomeTeam'], df['AwayTeam']]).unique())
     team_map = {team_name: i for i, team_name in enumerate(unique_teams_cleaned)}
     num_teams = len(team_map)
     df['HomeTeamID'] = df['HomeTeam'].map(team_map)
