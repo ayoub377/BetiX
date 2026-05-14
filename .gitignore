@@ -4,6 +4,7 @@ npm-debug.log*
 .next/
 dist/
 build/
+*.tsbuildinfo
 .env.local
 .env*.local
 
