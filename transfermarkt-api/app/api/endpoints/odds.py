@@ -416,16 +416,28 @@ async def track_match(
     }
 
 @router.get("/tracked")
-async def list_tracked_matches(redis_client=Depends(get_redis)):
-    """Return all currently tracked match IDs with their metadata."""
+async def list_tracked_matches(
+    redis_client=Depends(get_redis),
+    user: User = Depends(get_current_user),
+):
+    """Return the caller's currently tracked match IDs with their metadata.
+
+    Each tracker's owner is stored on the meta dict at /odds/track time
+    (meta["user_id"]). We filter against that here so users only see their
+    own active trackers.
+    """
     match_ids = await get_all_tracked_ids(redis_client)
 
     if not match_ids:
         return {"tracked_matches": [], "count": 0}
 
+    owner_id = str(user.id)
     matches = []
     for match_id in match_ids:
         meta = await get_match_meta(redis_client, match_id)
+        # Skip matches with no owner stamp (legacy data) or owned by someone else.
+        if not meta or str(meta.get("user_id") or "") != owner_id:
+            continue
         matches.append({
             "match_id": match_id,
             "meta": meta,
@@ -437,14 +449,18 @@ async def list_tracked_matches(redis_client=Depends(get_redis)):
 
 
 @router.get("/matches")
-async def list_all_matches(redis_client=Depends(get_redis)):
+async def list_all_matches(
+    redis_client=Depends(get_redis),
+    user: User = Depends(get_current_user),
+):
     """
-    Return all matches ever tracked (from PostgreSQL), enriched with
-    live status from Redis when available.
+    Return matches the caller has tracked (from PostgreSQL), enriched with
+    live status from Redis when available. Filtered server-side by user_id —
+    other users' trackers are never returned.
     """
     session = SessionLocal()
     try:
-        db_matches = get_all_matches_from_db(session)
+        db_matches = get_all_matches_from_db(session, user_id=str(user.id))
     finally:
         session.close()
 
@@ -469,6 +485,7 @@ async def list_all_matches(redis_client=Depends(get_redis)):
 async def stream_odds_history(
         match_id: str,
         redis_client=Depends(get_redis),
+        user: User = Depends(get_current_user),
         poll_interval: int = Query(default=10, ge=5, le=60,
                                    description="How often (seconds) to check for new snapshots"),
 ):
@@ -485,6 +502,14 @@ async def stream_odds_history(
         raise HTTPException(
             status_code=404,
             detail=f"Match {match_id} is not tracked. Start tracking via POST /odds/track."
+        )
+
+    # Ownership check — Flashscore match IDs are guessable, so without this a
+    # URL like /api/odds/history/XYZ would expose another user's stream.
+    if str(meta.get("user_id") or "") != str(user.id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Match {match_id} is not tracked. Start tracking via POST /odds/track.",
         )
 
     async def event_stream():
@@ -538,7 +563,11 @@ async def stream_odds_history(
 
 
 @router.get("/history/{match_id}/summary")
-async def get_match_history_summary(match_id: str, redis_client=Depends(get_redis)):
+async def get_match_history_summary(
+    match_id: str,
+    redis_client=Depends(get_redis),
+    user: User = Depends(get_current_user),
+):
     # 1. Try Redis first (fast, real-time data)
     meta = await get_match_meta(redis_client, match_id)
     history = await get_odds_history(redis_client, match_id)
@@ -556,6 +585,16 @@ async def get_match_history_summary(match_id: str, redis_client=Depends(get_redi
 
     if not meta and not history:
         return {"match_id": match_id, "history": [], "message": "No snapshots recorded yet."}
+
+    # Ownership check — same rationale as the SSE stream above. We hit Redis
+    # then DB to resolve meta, and only enforce ownership once we know which
+    # user owns the row.
+    owner = str((meta or {}).get("user_id") or "")
+    if owner and owner != str(user.id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Match {match_id} is not tracked.",
+        )
 
     if not meta:
         meta = {}
@@ -614,6 +653,15 @@ async def untrack_match(
         raise HTTPException(
             status_code=404,
             detail=f"Match '{match_id}' is not tracked."
+        )
+
+    # Ownership check — only the user who registered the tracker can stop it.
+    # Returns 404 (not 403) so we don't reveal that the match exists under
+    # another owner.
+    if str(meta.get("user_id") or "") != str(user.id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Match '{match_id}' is not tracked.",
         )
 
     # Stop the scheduler job

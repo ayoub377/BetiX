@@ -120,13 +120,17 @@ def get_match_snapshots(session: Session, match_id: str) -> list[dict]:
     return result
 
 
-def get_all_matches_from_db(session: Session) -> list[dict]:
-    """Return all matches ever tracked, most recent first."""
-    rows = (
-        session.query(TrackedMatch)
-        .order_by(TrackedMatch.id.desc())
-        .all()
-    )
+def get_all_matches_from_db(session: Session, user_id: Optional[str] = None) -> list[dict]:
+    """Return all matches ever tracked, most recent first.
+
+    When ``user_id`` is provided, only matches owned by that user are returned.
+    Legacy rows without a ``user_id`` are excluded under this filter so a fresh
+    user never sees another account's pre-existing trackers.
+    """
+    query = session.query(TrackedMatch)
+    if user_id is not None:
+        query = query.filter(TrackedMatch.user_id == user_id)
+    rows = query.order_by(TrackedMatch.id.desc()).all()
     return [
         {
             "match_id": r.match_id,
@@ -139,6 +143,7 @@ def get_all_matches_from_db(session: Session) -> list[dict]:
             "tracked_since": r.tracked_since,
             "odds_api_event_id": r.odds_api_event_id,
             "odds_api_sport_key": r.odds_api_sport_key,
+            "user_id": str(r.user_id) if r.user_id else None,
         }
         for r in rows
     ]
