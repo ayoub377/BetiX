@@ -4,15 +4,82 @@ Client for The Odds API — fetches sharp bookmaker odds for a given event.
 Only used when ODDS_API_KEY env var is set. Completely optional;
 the odds tracker works with FlashScore alone if no key is configured.
 """
+import datetime
 import logging
+import os
 import re
 from typing import Optional
 
 import httpx
+import redis as sync_redis
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.the-odds-api.com/v4"
+
+# ---------------------------------------------------------------------------
+# Usage counters (consumed by /admin/info).
+#
+# Every outbound Odds API call goes through ``_counted_get`` which bumps a
+# Redis lifetime counter plus a per-day counter (so the admin dashboard can
+# show today's spend without crunching a log file). A sync Redis client is
+# fine here — these calls already run inside ``run_in_executor`` from the
+# odds scheduler, so we're off the asyncio loop.
+#
+# Failures (Redis down, etc.) are swallowed: monitoring must never break the
+# main API path.
+# ---------------------------------------------------------------------------
+ODDS_API_TOTAL_KEY = "odds_api:calls:total"
+ODDS_API_DAILY_KEY_PREFIX = "odds_api:calls:"
+# 35 days of daily-call history is enough to see a billing cycle while keeping
+# the keyspace bounded.
+ODDS_API_DAILY_TTL_SECONDS = 35 * 86400
+
+_sync_redis_client: Optional[sync_redis.Redis] = None
+
+
+def _get_sync_redis() -> Optional[sync_redis.Redis]:
+    """Lazy-init a small sync Redis client just for usage counters.
+
+    Mirrors the host/port used by the async app client (see app/core/config.py).
+    """
+    global _sync_redis_client
+    if _sync_redis_client is not None:
+        return _sync_redis_client
+    try:
+        host = os.environ.get("REDIS_HOST", "localhost")
+        _sync_redis_client = sync_redis.Redis(host=host, port=6379, db=0, decode_responses=True)
+    except Exception as e:
+        logger.debug("Sync Redis init for Odds API counter failed: %s", e)
+        _sync_redis_client = None
+    return _sync_redis_client
+
+
+def _record_api_call() -> None:
+    """Increment the lifetime + today counters. Best-effort; never raises."""
+    client = _get_sync_redis()
+    if client is None:
+        return
+    try:
+        today_key = ODDS_API_DAILY_KEY_PREFIX + datetime.date.today().isoformat()
+        pipe = client.pipeline()
+        pipe.incr(ODDS_API_TOTAL_KEY)
+        pipe.incr(today_key)
+        pipe.expire(today_key, ODDS_API_DAILY_TTL_SECONDS)
+        pipe.execute()
+    except Exception as e:
+        logger.debug("Failed to record Odds API call counter: %s", e)
+
+
+def _counted_get(url: str, params: dict, timeout: int = 15) -> httpx.Response:
+    """Wrapper around ``httpx.get`` that bumps the usage counters first.
+
+    Counting before the request (rather than after) means we still attribute
+    a call we paid for to the user even if the response is non-200 — The Odds
+    API counts failed requests against the quota too.
+    """
+    _record_api_call()
+    return httpx.get(url, params=params, timeout=timeout)
 
 # Sharp bookmakers whose odds we want to capture alongside FlashScore
 SHARP_BOOKMAKERS = ["pinnacle", "betfair_ex_eu", "betonlineag"]
@@ -165,7 +232,7 @@ def find_event(
     for sk in keys_to_search:
         try:
             url = f"{BASE_URL}/sports/{sk}/events"
-            resp = httpx.get(url, params={"apiKey": api_key}, timeout=15)
+            resp = _counted_get(url, params={"apiKey": api_key}, timeout=15)
             if resp.status_code != 200:
                 logger.warning("Odds API events returned %s for %s", resp.status_code, sk)
                 continue
@@ -309,7 +376,7 @@ def get_event_commence_time(
     """
     try:
         url = f"{BASE_URL}/sports/{sport_key}/events"
-        resp = httpx.get(url, params={"apiKey": api_key}, timeout=15)
+        resp = _counted_get(url, params={"apiKey": api_key}, timeout=15)
         if resp.status_code != 200:
             logger.warning(
                 "Odds API events returned %s when refreshing commence_time for %s/%s",
@@ -354,7 +421,7 @@ def fetch_event_scores(
             "daysFrom": days_from,
             "eventIds": event_id,
         }
-        resp = httpx.get(url, params=params, timeout=15)
+        resp = _counted_get(url, params=params, timeout=15)
         if resp.status_code != 200:
             logger.warning(
                 "Odds API scores returned %s for %s/%s",
@@ -428,7 +495,7 @@ def fetch_sharp_odds(
             "oddsFormat": "decimal",
             "bookmakers": ",".join(SHARP_BOOKMAKERS),
         }
-        resp = httpx.get(url, params=params, timeout=15)
+        resp = _counted_get(url, params=params, timeout=15)
         if resp.status_code != 200:
             logger.warning(
                 "Odds API event odds returned %s for %s/%s",
