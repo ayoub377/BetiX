@@ -36,11 +36,14 @@ async def store_odds_snapshot(
     redis_client, match_id: str, odds: dict,
     sport: str = "football",
     sharp_odds: Optional[dict] = None,
-):
+) -> dict:
     """Append one odds snapshot to Redis AND persist to PostgreSQL.
 
     For football: odds dict has keys home, draw, away, bookmaker
     For tennis:   odds dict has keys player1, player2, bookmaker
+
+    Returns the snapshot dict that was written so callers (e.g. the
+    Telegram alert dispatcher) can act on it without re-reading Redis.
     """
     snapshot = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -67,6 +70,8 @@ async def store_odds_snapshot(
     asyncio.get_event_loop().run_in_executor(
         None, _persist_snapshot_to_db, match_id, snapshot
     )
+
+    return snapshot
 
 
 async def get_odds_history(redis_client, match_id: str) -> list[dict]:

@@ -21,6 +21,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { apiClient, isApiError } from "@/lib/apiClient";
 import LogoutButton from "@/components/ui/LogoutButton";
+import TelegramAlertsCard from "@/components/ui/TelegramAlertsCard";
 
 const QUICK_ACTIONS = [
   {
@@ -268,6 +269,14 @@ export default function DashboardPage() {
             />
           </div>
         </div>
+      </section>
+
+      {/* ─── Telegram alerts ────────────────────────────────────── */}
+      <section>
+        <h2 className="text-xs font-semibold tracking-wider uppercase text-gray-500 dark:text-gray-400 mb-3">
+          Notifications
+        </h2>
+        <TelegramAlertsCard />
       </section>
 
       {/* ─── Account ────────────────────────────────────────────── */}

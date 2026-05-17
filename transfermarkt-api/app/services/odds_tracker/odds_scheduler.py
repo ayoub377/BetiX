@@ -158,11 +158,27 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                             meta.get("home_team", ""), meta.get("away_team", ""),
                         )
 
-                await store_odds_snapshot(
+                snapshot = await store_odds_snapshot(
                     redis_client, match_id, odds,
                     sport=sport,
                     sharp_odds=sharp_odds or None,
                 )
+
+                # Fire Telegram alerts on threshold breach. Best-effort —
+                # never raises into this job. Only does work if the
+                # match's owner is premium and has alerts wired up.
+                try:
+                    from app.services.telegram.alert_dispatcher import maybe_dispatch_alert
+                    if meta:
+                        await maybe_dispatch_alert(
+                            redis_client=redis_client,
+                            match_id=match_id,
+                            new_snapshot=snapshot,
+                            match_meta=meta,
+                            sport=sport,
+                        )
+                except Exception as e:
+                    logger.warning("Telegram alert dispatch failed for %s: %s", match_id, e)
             else:
                 logger.warning("No valid odds returned for match %s (%s)", match_id, sport)
         except Exception as e:

@@ -32,6 +32,13 @@ _SOFT_MIGRATIONS = (
     'ALTER TABLE tracked_matches ADD COLUMN IF NOT EXISTS user_id UUID',
     'ALTER TABLE tracked_matches ADD COLUMN IF NOT EXISTS poll_interval_seconds INTEGER',
     'CREATE INDEX IF NOT EXISTS ix_tracked_matches_user_id ON tracked_matches (user_id)',
+    # Telegram alerts (premium feature). chat_id is set after the deep-link
+    # flow completes; threshold_pct is the abs % move from opening odds at
+    # which we DM the user.
+    'ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(64)',
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_alerts_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+    'ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_alert_threshold_pct DOUBLE PRECISION',
+    'CREATE INDEX IF NOT EXISTS ix_users_telegram_chat_id ON users (telegram_chat_id)',
 )
 
 
