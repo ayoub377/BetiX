@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import Column, DateTime, Index, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Index, String
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.models.team import Base
@@ -32,6 +32,17 @@ class User(Base):
     lemonsqueezy_subscription_id = Column(String(64), nullable=True)
     subscription_status = Column(String(32), nullable=True)
     current_period_end = Column(DateTime(timezone=True), nullable=True)
+
+    # Telegram alert wiring (premium-only product feature).
+    # ``telegram_chat_id`` is set when a user completes the bot deep-link flow;
+    # alerts are gated on (chat_id is not null) AND telegram_alerts_enabled
+    # AND a threshold being configured. The threshold is the *absolute* % move
+    # (in either direction) of any 1X2/2-way market vs the opening snapshot
+    # at which we DM the user. Nullable so we can ship the migration without
+    # forcing a default on every existing row.
+    telegram_chat_id = Column(String(64), nullable=True, index=True)
+    telegram_alerts_enabled = Column(Boolean, nullable=False, default=False)
+    telegram_alert_threshold_pct = Column(Float, nullable=True)
 
     created_at = Column(
         DateTime(timezone=True),
