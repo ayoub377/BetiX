@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from firebase_admin import firestore
 from app.models.users import WaitlistEmail
-from app.api.endpoints import admin_dixon_coles, billing, clubs, competitions, players, odds, predictions, telegram, users
+from app.api.endpoints import admin_dixon_coles, admin_info, billing, clubs, competitions, players, odds, predictions, telegram, users
 
 api_router = APIRouter()
 
@@ -34,6 +34,13 @@ api_router.include_router(
     admin_dixon_coles.router,
     prefix="/admin/dixon-coles",
     tags=["admin · Dixon-Coles"],
+)
+
+#admin (platform dashboard — users, tracking load, Odds API spend)
+api_router.include_router(
+    admin_info.router,
+    prefix="/admin",
+    tags=["admin · Dashboard"],
 )
 
 

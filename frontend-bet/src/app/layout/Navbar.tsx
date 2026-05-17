@@ -191,6 +191,18 @@ export default function Navbar() {
             <a href="/#faq" onClick={handleSectionClick("faq")} className={desktopNavLinkStyles(false)}>
               FAQ
             </a>
+            {role === "admin" && (
+              <Link
+                href="/admin"
+                className={clsx(
+                  desktopNavLinkStyles(pathname === "/admin" || pathname.startsWith("/admin/")),
+                  "flex items-center gap-1.5",
+                )}
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Admin
+              </Link>
+            )}
           </div>
         </div>
 
@@ -291,6 +303,16 @@ export default function Navbar() {
             >
               FAQ
             </a>
+            {role === "admin" && (
+              <Link
+                href="/admin"
+                onClick={() => setIsMenuOpen(false)}
+                className="flex items-center gap-2 px-3 py-2 rounded-md text-base font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Admin
+              </Link>
+            )}
             <div className="pt-3 mt-2 border-t border-gray-200 dark:border-slate-700 flex items-center gap-2">
               {firebaseUser && role && <RoleBadge role={role} />}
               <Button
