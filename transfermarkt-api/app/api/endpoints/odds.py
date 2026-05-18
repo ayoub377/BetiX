@@ -393,10 +393,28 @@ async def track_match(
 
     # Resolve the markets the user wants tracked. Tennis is 1X2-only, so
     # we override any other selection — clearer than rejecting the request.
+    # Non-1X2 markets are fetched via The Odds API, not FlashScore, so any
+    # match we couldn't map to an Odds API event (lower-tier league,
+    # friendly, geo-blocked sport) silently loses its non-1X2 selections.
+    # We record the dropped markets so the response can tell the user.
+    dropped_markets: list[str] = []
     if sport == SportType.TENNIS:
         meta["markets"] = [MARKET_1X2]
     else:
-        meta["markets"] = body.markets or list(DEFAULT_MARKETS)
+        requested = body.markets or list(DEFAULT_MARKETS)
+        has_event = bool(meta.get("odds_api_event_id") and meta.get("odds_api_sport_key"))
+        resolved: list[str] = []
+        for m in requested:
+            if m == MARKET_1X2 or has_event:
+                resolved.append(m)
+            else:
+                dropped_markets.append(m)
+        meta["markets"] = resolved or [MARKET_1X2]
+    if dropped_markets:
+        logger.info(
+            "Dropped non-1X2 markets %s for match %s — no Odds API event mapping.",
+            dropped_markets, match_id,
+        )
     logger.info("Step 5: markets resolved → %s", meta["markets"])
 
     await register_match(redis_client, match_id, meta)
@@ -442,14 +460,27 @@ async def track_match(
             )
             logger.info("Step 6: Initial 1X2 snapshot stored.")
         else:
-            try:
-                market_odds = await loop.run_in_executor(
-                    None, scraper.get_odds_by_market, match_id, market,
+            # Non-1X2 markets come from The Odds API, not FlashScore.
+            # Markets without an event mapping were already filtered out
+            # above, so this branch can assume the mapping exists.
+            line = MARKET_LINE.get(market)
+            if not odds_api_key or line is None:
+                logger.info(
+                    "Step 6: Skipping initial %s snapshot (no API key or no line).",
+                    market,
                 )
-                if market_odds.get("over") is None:
+                continue
+            try:
+                from app.services.odds_api.odds_api_client import fetch_totals_odds
+                market_odds = await loop.run_in_executor(
+                    None, fetch_totals_odds,
+                    odds_api_key, meta["odds_api_sport_key"],
+                    meta["odds_api_event_id"], line,
+                )
+                if not market_odds or market_odds.get("over") is None:
                     logger.info(
                         "Step 6: No valid initial odds yet for %s on %s.",
-                        match_id, market,
+                        market, match_id,
                     )
                     continue
                 await store_odds_snapshot(
@@ -458,11 +489,11 @@ async def track_match(
                     sharp_odds=None,
                     market=market,
                 )
-                logger.info("Step 6: Initial %s snapshot stored.", market)
+                logger.info("Step 6: Initial %s snapshot stored (via Odds API).", market)
             except Exception as e:
                 # One bad market shouldn't block the whole /track call.
                 logger.warning(
-                    "Step 6: Initial scrape for market %s failed: %s",
+                    "Step 6: Initial Odds API fetch for market %s failed: %s",
                     market, e,
                 )
 
@@ -489,13 +520,28 @@ async def track_match(
         else:
             await redis_client.incr(daily_track_key)
 
-    return {
+    response: dict = {
         "match_id": match_id,
         "sport": sport.value,
         "status": "tracking_started",
         "meta": meta,
         "message": f"Tracking {sport.value} odds every {poll_interval}s until kickoff.",
     }
+    if dropped_markets:
+        # Surface to the frontend so the user understands why their O/U
+        # checkbox didn't take effect — better than a silent miss.
+        response["warnings"] = [
+            {
+                "code": "market_unavailable_no_odds_api_event",
+                "markets": dropped_markets,
+                "message": (
+                    "This match isn't on The Odds API, so we can only track "
+                    "1X2 (which comes from FlashScore). Non-1X2 markets like "
+                    "Over/Under need the Odds API mapping."
+                ),
+            }
+        ]
+    return response
 
 @router.get("/tracked")
 async def list_tracked_matches(

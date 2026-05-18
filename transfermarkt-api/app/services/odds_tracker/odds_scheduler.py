@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.models.markets import DEFAULT_MARKETS, MARKET_1X2, is_supported
+from app.models.markets import DEFAULT_MARKETS, MARKET_1X2, MARKET_LINE, is_supported
 from app.services.odds_tracker.odds_tracker import (
     store_odds_snapshot, get_match_meta,
     unregister_match, update_match_meta_field, TRACKED_INDEX_KEY,
@@ -30,6 +30,22 @@ def _fetch_sharp_odds_sync(api_key, sport_key, event_id, home_team, away_team):
         return fetch_sharp_odds(api_key, sport_key, event_id, home_team, away_team)
     except Exception as e:
         logger.warning("Sharp odds fetch failed: %s", e)
+        return {}
+
+
+def _fetch_totals_odds_sync(api_key, sport_key, event_id, line):
+    """Fetch Over/Under totals odds (sync, runs in thread pool).
+
+    Used for non-1X2 markets — we hit The Odds API directly rather than
+    re-scraping FlashScore's totals sub-page. Trades a ~1 credit/match/tick
+    Odds API cost for a much more reliable + faster fetch (no Selenium,
+    structured JSON, Pinnacle included).
+    """
+    try:
+        from app.services.odds_api.odds_api_client import fetch_totals_odds
+        return fetch_totals_odds(api_key, sport_key, event_id, line=line)
+    except Exception as e:
+        logger.warning("Totals odds fetch failed: %s", e)
         return {}
 
 
@@ -151,16 +167,48 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
         for market in markets_to_scrape:
             try:
                 if sport == "tennis" or market == MARKET_1X2:
-                    # Existing path — keep using the legacy method name
-                    # so tennis-only deployments don't need to ship the
-                    # new dispatcher method.
+                    # 1X2 (and all tennis) → FlashScore scrape.
                     odds = await loop.run_in_executor(
                         io_executor, scraper.get_odds_by_match_id, match_id,
                     )
                 else:
-                    # Football, non-1X2 — go through the market dispatcher.
+                    # Football, non-1X2 (currently Over/Under). We route
+                    # this through The Odds API rather than FlashScore for
+                    # three reasons: (a) totals scraping is fragile against
+                    # FlashScore DOM changes, (b) the API gives us Pinnacle
+                    # for free as the primary book, (c) one HTTPS call is
+                    # ~50× faster than a fresh Selenium navigation.
+                    #
+                    # Requires the match to be mapped to an Odds API event
+                    # (we do that lookup at /track time). Matches without
+                    # an event_id silently skip non-1X2 markets and the
+                    # /odds/track endpoint warns the user up front.
+                    if not api_key or not meta:
+                        logger.debug(
+                            "Skipping market %s for %s: no Odds API key configured.",
+                            market, match_id,
+                        )
+                        continue
+                    event_id = meta.get("odds_api_event_id")
+                    sport_key = meta.get("odds_api_sport_key")
+                    if not event_id or not sport_key:
+                        logger.warning(
+                            "Skipping market %s for %s: match not mapped to an Odds API event.",
+                            market, match_id,
+                        )
+                        continue
+                    line = MARKET_LINE.get(market)
+                    if line is None:
+                        # Future-proofing: e.g. BTTS has no line — caller
+                        # would route through a different fetcher entirely.
+                        logger.debug(
+                            "Skipping market %s for %s: no line configured.",
+                            market, match_id,
+                        )
+                        continue
                     odds = await loop.run_in_executor(
-                        io_executor, scraper.get_odds_by_market, match_id, market,
+                        io_executor, _fetch_totals_odds_sync,
+                        api_key, sport_key, event_id, line,
                     )
 
                 # Per-market validity check

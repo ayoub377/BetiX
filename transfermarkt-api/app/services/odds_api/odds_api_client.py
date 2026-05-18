@@ -509,3 +509,169 @@ def fetch_sharp_odds(
     except Exception as e:
         logger.warning("Failed to fetch sharp odds for %s: %s", event_id, e)
         return {}
+
+
+# Preference order for picking the "primary" bookmaker on a totals snapshot.
+# Pinnacle is the sharpest book and the most stable line — pick it first.
+# Bet365 and Betclic are soft books carried by The Odds API and broadly
+# available across regions, so they're the natural fallbacks if Pinnacle
+# isn't offering the requested line for a given match (rare but possible
+# for obscure fixtures).
+TOTALS_PRIMARY_BOOKMAKERS = (
+    "pinnacle",
+    "bet365",
+    "betclic",
+    "betfair_ex_eu",
+    "williamhill",
+    "betonlineag",
+)
+
+
+def extract_totals_from_event(
+    event_data: dict,
+    line: float,
+) -> dict:
+    """Pull O/U odds for ``line`` (e.g. 2.5) out of a /events/{id}/odds
+    response that was requested with ``markets=totals``.
+
+    Returns the same shape the scheduler / persistence layer expects::
+
+        {
+            "line": 2.5,
+            "over": 1.92,
+            "under": 1.95,
+            "bookmaker": "pinnacle",
+            "source_url": None,  # API-sourced, no FlashScore URL
+            "available_books": ["pinnacle", "bet365", ...],
+        }
+
+    Picks the first bookmaker (in :data:`TOTALS_PRIMARY_BOOKMAKERS` order)
+    that quotes both Over and Under for the requested line. Returns
+    ``{}`` if no listed book quotes that line — the caller treats this as
+    "no valid odds this tick" and the scheduler will retry next cycle.
+    """
+    # Bucket: bookmaker_key → {"over": price|None, "under": price|None}
+    by_book: dict[str, dict[str, float]] = {}
+    available_books: list[str] = []
+
+    for bm in event_data.get("bookmakers", []) or []:
+        bm_key = bm.get("key") or ""
+        if not bm_key:
+            continue
+        for market in bm.get("markets", []) or []:
+            if market.get("key") != "totals":
+                continue
+            for outcome in market.get("outcomes", []) or []:
+                # The Odds API encodes the line in ``point`` and uses
+                # Title-case "Over"/"Under" in ``name``.
+                try:
+                    point = float(outcome.get("point"))
+                except (TypeError, ValueError):
+                    continue
+                if abs(point - line) > 1e-6:
+                    continue
+                name = (outcome.get("name") or "").strip().lower()
+                price = outcome.get("price")
+                if price is None or name not in ("over", "under"):
+                    continue
+                try:
+                    price_f = float(price)
+                except (TypeError, ValueError):
+                    continue
+                if price_f <= 1.0:
+                    # Sanity guard: decimal odds <= 1 are nonsense; skip.
+                    continue
+                slot = by_book.setdefault(bm_key, {})
+                slot[name] = price_f
+
+        # Track every book that quoted the line, even if only one side.
+        # Useful for logging — helps debug "why didn't Pinnacle have
+        # this line on this match".
+        if bm_key in by_book and bm_key not in available_books:
+            available_books.append(bm_key)
+
+    # Pick the first preferred book that has BOTH sides.
+    for preferred in TOTALS_PRIMARY_BOOKMAKERS:
+        slot = by_book.get(preferred)
+        if slot and "over" in slot and "under" in slot:
+            return {
+                "line": line,
+                "over": slot["over"],
+                "under": slot["under"],
+                "bookmaker": preferred,
+                "source_url": None,
+                "available_books": available_books,
+            }
+
+    # No preferred book had both sides — fall back to ANY book that did.
+    # This keeps tracking working for obscure leagues where the sharps
+    # might not be live.
+    for bm_key, slot in by_book.items():
+        if "over" in slot and "under" in slot:
+            return {
+                "line": line,
+                "over": slot["over"],
+                "under": slot["under"],
+                "bookmaker": bm_key,
+                "source_url": None,
+                "available_books": available_books,
+            }
+
+    return {}
+
+
+def fetch_totals_odds(
+    api_key: str,
+    sport_key: str,
+    event_id: str,
+    line: float = 2.5,
+) -> dict:
+    """Fetch Over/Under totals odds for ``event_id`` at ``line``.
+
+    Single network call (markets=totals) so this costs ~1 Odds API credit
+    per scrape per match. Same response shape FlashScore-scraped O/U
+    snapshots used to produce, so the scheduler is callsite-compatible.
+
+    Returns ``{}`` on any failure / missing line / 429 / network error;
+    the scheduler treats that as "no valid odds this tick" and moves on.
+    """
+    try:
+        url = f"{BASE_URL}/sports/{sport_key}/events/{event_id}/odds"
+        params = {
+            "apiKey": api_key,
+            "regions": "eu,us",
+            "markets": "totals",
+            "oddsFormat": "decimal",
+            # Don't filter to sharp-only — for totals we want the broadest
+            # bookmaker pool so the fallback in extract_totals_from_event
+            # has options when Pinnacle doesn't carry the line.
+        }
+        resp = _counted_get(url, params=params, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(
+                "Odds API totals returned %s for %s/%s line=%s",
+                resp.status_code, sport_key, event_id, line,
+            )
+            return {}
+
+        event_data = resp.json()
+        result = extract_totals_from_event(event_data, line=line)
+        if result:
+            logger.info(
+                "Fetched totals %s for %s via %s: over=%s under=%s (books quoting: %s)",
+                line, event_id, result["bookmaker"], result["over"], result["under"],
+                len(result.get("available_books", [])),
+            )
+        else:
+            logger.warning(
+                "No bookmaker quoted both Over and Under at line %s for %s/%s",
+                line, sport_key, event_id,
+            )
+        return result
+
+    except Exception as e:
+        logger.warning(
+            "Failed to fetch totals odds for %s/%s line=%s: %s",
+            sport_key, event_id, line, e,
+        )
+        return {}
