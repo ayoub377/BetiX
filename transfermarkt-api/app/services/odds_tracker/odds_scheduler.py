@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from app.models.markets import DEFAULT_MARKETS, MARKET_1X2, is_supported
 from app.services.odds_tracker.odds_tracker import (
     store_odds_snapshot, get_match_meta,
     unregister_match, update_match_meta_field, TRACKED_INDEX_KEY,
@@ -129,31 +130,65 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                         )
                     return
 
-        try:
-            loop = asyncio.get_event_loop()
-            odds = await loop.run_in_executor(
-                io_executor,
-                scraper.get_odds_by_match_id,
-                match_id
-            )
+        # ── Scrape each configured market ───────────────────────────
+        # Tennis stays on 1X2 only — non-1X2 markets are football-specific
+        # for now (BTTS / OU / etc.). Football honours whatever the user
+        # configured at /track time, defaulting to 1X2 only for legacy
+        # rows that pre-date the markets column.
+        configured = meta.get("markets") if meta else None
+        if sport == "tennis":
+            markets_to_scrape = [MARKET_1X2]
+        elif configured:
+            markets_to_scrape = [m for m in configured if is_supported(m)]
+            if not markets_to_scrape:
+                markets_to_scrape = list(DEFAULT_MARKETS)
+        else:
+            markets_to_scrape = list(DEFAULT_MARKETS)
 
-            # Sport-aware validity check
-            if sport == "tennis":
-                has_valid_odds = odds.get("player1") is not None
-            else:
-                has_valid_odds = odds.get("home") is not None
+        loop = asyncio.get_event_loop()
+        api_key = os.environ.get("ODDS_API_KEY")
 
-            if has_valid_odds:
-                # Fetch sharp bookmaker odds if Odds API is configured
+        for market in markets_to_scrape:
+            try:
+                if sport == "tennis" or market == MARKET_1X2:
+                    # Existing path — keep using the legacy method name
+                    # so tennis-only deployments don't need to ship the
+                    # new dispatcher method.
+                    odds = await loop.run_in_executor(
+                        io_executor, scraper.get_odds_by_match_id, match_id,
+                    )
+                else:
+                    # Football, non-1X2 — go through the market dispatcher.
+                    odds = await loop.run_in_executor(
+                        io_executor, scraper.get_odds_by_market, match_id, market,
+                    )
+
+                # Per-market validity check
+                if sport == "tennis":
+                    has_valid = odds.get("player1") is not None
+                elif market == MARKET_1X2:
+                    has_valid = odds.get("home") is not None
+                else:
+                    has_valid = odds.get("over") is not None
+
+                if not has_valid:
+                    logger.warning(
+                        "No valid odds returned for match %s (%s/%s)",
+                        match_id, sport, market,
+                    )
+                    continue
+
+                # Sharp odds (Odds API) only cover 1X2 for now. When we
+                # wire totals/btts to the Odds API we can extend this — for
+                # now keep them at None on non-1X2 snapshots so the chart
+                # doesn't draw a meaningless sharp series.
                 sharp_odds = {}
-                api_key = os.environ.get("ODDS_API_KEY")
-                if api_key and meta:
+                if api_key and meta and market == MARKET_1X2:
                     event_id = meta.get("odds_api_event_id")
                     sport_key = meta.get("odds_api_sport_key")
                     if event_id and sport_key:
                         sharp_odds = await loop.run_in_executor(
-                            io_executor,
-                            _fetch_sharp_odds_sync,
+                            io_executor, _fetch_sharp_odds_sync,
                             api_key, sport_key, event_id,
                             meta.get("home_team", ""), meta.get("away_team", ""),
                         )
@@ -162,11 +197,10 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                     redis_client, match_id, odds,
                     sport=sport,
                     sharp_odds=sharp_odds or None,
+                    market=market,
                 )
 
-                # Fire Telegram alerts on threshold breach. Best-effort —
-                # never raises into this job. Only does work if the
-                # match's owner is premium and has alerts wired up.
+                # Telegram alert dispatch — best-effort, per market.
                 try:
                     from app.services.telegram.alert_dispatcher import maybe_dispatch_alert
                     if meta:
@@ -176,13 +210,19 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                             new_snapshot=snapshot,
                             match_meta=meta,
                             sport=sport,
+                            market=market,
                         )
                 except Exception as e:
-                    logger.warning("Telegram alert dispatch failed for %s: %s", match_id, e)
-            else:
-                logger.warning("No valid odds returned for match %s (%s)", match_id, sport)
-        except Exception as e:
-            logger.error("Scrape job failed for match %s: %s", match_id, e, exc_info=True)
+                    logger.warning(
+                        "Telegram alert dispatch failed for %s (market=%s): %s",
+                        match_id, market, e,
+                    )
+            except Exception as e:
+                # A single bad market shouldn't kill the rest of the tick.
+                logger.error(
+                    "Scrape job failed for match %s market %s: %s",
+                    match_id, market, e, exc_info=True,
+                )
 
     return scrape_job
 

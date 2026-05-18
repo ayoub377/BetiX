@@ -834,6 +834,23 @@ class FlashScoreScraper:
         finally:
             driver.quit()
 
+    def get_odds_by_market(self, match_id: str, market: str) -> dict:
+        """Dispatch to the right per-market scraper.
+
+        Centralises the "what does the API call think a market is → which
+        scraper method handles it" mapping so callers (the scheduler) only
+        deal in market ids from :mod:`app.models.markets`. Unknown markets
+        return an empty-shape dict rather than raising — keeps the
+        scheduler robust against config drift.
+        """
+        from app.models.markets import MARKET_1X2, MARKET_OU_2_5
+        if market == MARKET_1X2:
+            return self.get_odds_by_match_id(match_id)
+        if market == MARKET_OU_2_5:
+            return self.get_over_under_odds_by_match_id(match_id, line=2.5)
+        self.logger.warning("Unknown market '%s' for match %s — skipping.", market, match_id)
+        return {}
+
     def get_odds_by_match_id(self, match_id: str) -> dict:
         """
         Scrape odds directly using a known FlashScore match ID.
@@ -934,6 +951,133 @@ class FlashScoreScraper:
             self.logger.error("Error scraping odds for match_id '%s': %s", match_id, e, exc_info=True)
             raise
 
+        finally:
+            driver.quit()
+
+    def get_over_under_odds_by_match_id(self, match_id: str, line: float = 2.5) -> dict:
+        """Scrape Over/Under odds for a given total line (default 2.5).
+
+        FlashScore's odds page has a sub-tab per market — we navigate
+        straight to the over/under variant rather than clicking through,
+        because the URL is deterministic and direct loads are faster + more
+        reliable than waiting for the SPA to swap content.
+
+        URL pattern (full-time totals):
+          {BASE}/match/{id}/#/odds-comparison/over-under/full-time
+
+        Returns: {"line": float, "over": float|None, "under": float|None,
+                  "bookmaker": str|None, "source_url": str}
+        The line is echoed back so the caller doesn't have to track it
+        separately when forwarding to the snapshot writer.
+        """
+        self.logger.info(
+            "Scraping O/U %s odds for match_id: %s", line, match_id,
+        )
+        driver = self._get_driver()
+        empty = {"line": line, "over": None, "under": None,
+                 "bookmaker": None, "source_url": None}
+
+        try:
+            ou_url = (
+                f"{self.BASE_URL}match/{match_id}/#/odds-comparison/over-under/full-time"
+            )
+            self.logger.info("Navigating directly to O/U odds: %s", ou_url)
+            driver.get(ou_url)
+
+            wait = WebDriverWait(driver, 20)
+            self._accept_privacy_or_cookies(driver)
+
+            # Some matches need the SPA to settle — give the odds table a
+            # generous wait. Same selector as the 1X2 scraper because
+            # FlashScore reuses the row markup across odds sub-tabs.
+            ROW_XPATH = "//div[contains(@class,'ui-table__row')]"
+            try:
+                wait.until(EC.presence_of_element_located((By.XPATH, ROW_XPATH)))
+            except TimeoutException:
+                self.logger.warning("O/U odds table not found for match %s", match_id)
+                empty["source_url"] = driver.current_url
+                return empty
+
+            time.sleep(1.5)  # let async row updates finish painting
+
+            # The O/U table has one row per (bookmaker × total line).
+            # FlashScore renders the total as the first cell in the row;
+            # the over/under odds live under data-analytics-element
+            # ODD_CELL_OVER / ODD_CELL_UNDER (slot 1 / slot 2). We scan
+            # every row and pick the one whose printed total matches the
+            # requested line.
+            LINE_XPATH = ".//span[contains(@class, 'oddsCell__noOddsCell')]" \
+                         "|.//span[contains(@class,'wcl-oddsCell__totalText')]" \
+                         "|.//span[@data-testid='wcl-oddsCell-totals']"
+            OVER_XPATH = ".//a[contains(@data-analytics-element,'ODD_CELL_1')]//span"
+            UNDER_XPATH = ".//a[contains(@data-analytics-element,'ODD_CELL_2')]//span"
+            BOOKMAKER_XPATH = ".//img[contains(@class,'wcl-logoImage')]"
+
+            rows = driver.find_elements(By.XPATH, ROW_XPATH)
+            self.logger.info("Found %d O/U rows for match %s.", len(rows), match_id)
+
+            target_line_str = f"{line:.1f}"  # e.g. "2.5"
+            for row_idx, row in enumerate(rows):
+                try:
+                    # The total label may appear in any of several elements;
+                    # we just compare the row's text content to the target.
+                    row_text = (row.text or "").lower()
+                    if target_line_str not in row_text:
+                        continue
+                    over_odd = row.find_element(By.XPATH, OVER_XPATH).text.strip()
+                    under_odd = row.find_element(By.XPATH, UNDER_XPATH).text.strip()
+                    if not all(self._is_valid_odd(o) for o in (over_odd, under_odd)):
+                        continue
+                    try:
+                        bookmaker = row.find_element(
+                            By.XPATH, BOOKMAKER_XPATH,
+                        ).get_attribute("alt")
+                    except NoSuchElementException:
+                        bookmaker = "Unknown"
+
+                    self.logger.info(
+                        "Row %d O/U %s — over: %s | under: %s | bookmaker: %s",
+                        row_idx, target_line_str, over_odd, under_odd, bookmaker,
+                    )
+                    return {
+                        "line": line,
+                        "over": float(over_odd),
+                        "under": float(under_odd),
+                        "bookmaker": bookmaker,
+                        "source_url": driver.current_url,
+                    }
+                except NoSuchElementException:
+                    continue
+                except Exception as e:
+                    self.logger.debug("Row %d parse failed: %s", row_idx, e)
+                    continue
+
+            self.logger.warning(
+                "No O/U row matched line %s for match %s.", target_line_str, match_id,
+            )
+            if self.persist_outputs and self.output_dir:
+                try:
+                    driver.save_screenshot(
+                        self.output_dir / f"debug_no_ou_row_{match_id}_{line}.png"
+                    )
+                except Exception:
+                    pass
+            empty["source_url"] = driver.current_url
+            return empty
+
+        except Exception as e:
+            self.logger.error(
+                "Error scraping O/U odds for match_id '%s' line %s: %s",
+                match_id, line, e, exc_info=True,
+            )
+            if self.persist_outputs and self.output_dir:
+                try:
+                    driver.save_screenshot(
+                        self.output_dir / f"error_ou_{match_id}_{line}.png"
+                    )
+                except Exception:
+                    pass
+            return empty
         finally:
             driver.quit()
 

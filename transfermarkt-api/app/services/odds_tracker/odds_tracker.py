@@ -3,6 +3,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from app.models.markets import MARKET_1X2
+
 logger = logging.getLogger(__name__)
 
 
@@ -11,8 +13,16 @@ def match_meta_key(match_id: str) -> str:
     return f"tracked_match:{match_id}"
 
 
-def odds_history_key(match_id: str) -> str:
-    return f"odds_history:{match_id}"
+def odds_history_key(match_id: str, market: str = MARKET_1X2) -> str:
+    """Redis list key for a match's odds history on a given market.
+
+    The 1X2 key keeps its legacy shape (``odds_history:<id>``) so any
+    in-flight Redis data from before the multi-market change still loads
+    seamlessly. Other markets get a suffix (e.g. ``odds_history:<id>:ou_2.5``).
+    """
+    if market == MARKET_1X2:
+        return f"odds_history:{match_id}"
+    return f"odds_history:{match_id}:{market}"
 
 
 TRACKED_INDEX_KEY = "tracked_matches_index"
@@ -36,34 +46,47 @@ async def store_odds_snapshot(
     redis_client, match_id: str, odds: dict,
     sport: str = "football",
     sharp_odds: Optional[dict] = None,
+    market: str = MARKET_1X2,
 ) -> dict:
     """Append one odds snapshot to Redis AND persist to PostgreSQL.
 
-    For football: odds dict has keys home, draw, away, bookmaker
-    For tennis:   odds dict has keys player1, player2, bookmaker
+    Snapshot shape varies by ``market``:
+      - market='1x2' football  → keys home, draw, away
+      - market='1x2' tennis    → keys player1, player2
+      - market='ou_2.5' etc.   → keys over, under, line
 
     Returns the snapshot dict that was written so callers (e.g. the
     Telegram alert dispatcher) can act on it without re-reading Redis.
     """
-    snapshot = {
+    snapshot: dict = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "sport": sport,
+        "market": market,
         "bookmaker": odds.get("bookmaker"),
     }
 
-    if sport == "tennis":
-        snapshot["player1"] = odds.get("player1")
-        snapshot["player2"] = odds.get("player2")
-    else:  # football (default, backward compatible)
-        snapshot["home"] = odds.get("home")
-        snapshot["draw"] = odds.get("draw")
-        snapshot["away"] = odds.get("away")
+    if market == MARKET_1X2:
+        if sport == "tennis":
+            snapshot["player1"] = odds.get("player1")
+            snapshot["player2"] = odds.get("player2")
+        else:  # football
+            snapshot["home"] = odds.get("home")
+            snapshot["draw"] = odds.get("draw")
+            snapshot["away"] = odds.get("away")
+    else:
+        # Over/Under (and future totals-style markets).
+        snapshot["over"] = odds.get("over")
+        snapshot["under"] = odds.get("under")
+        if odds.get("line") is not None:
+            snapshot["line"] = odds.get("line")
 
     if sharp_odds:
         snapshot["sharp_odds"] = sharp_odds
 
-    await redis_client.rpush(odds_history_key(match_id), json.dumps(snapshot))
-    logger.info("Stored odds snapshot for %s (%s): %s", match_id, sport, snapshot)
+    await redis_client.rpush(
+        odds_history_key(match_id, market), json.dumps(snapshot),
+    )
+    logger.info("Stored odds snapshot for %s (%s/%s): %s", match_id, sport, market, snapshot)
 
     # Dual-write to PostgreSQL (non-blocking, best-effort)
     import asyncio
@@ -74,9 +97,15 @@ async def store_odds_snapshot(
     return snapshot
 
 
-async def get_odds_history(redis_client, match_id: str) -> list[dict]:
-    """Return full odds history for a match, oldest first."""
-    raw_entries = await redis_client.lrange(odds_history_key(match_id), 0, -1)
+async def get_odds_history(
+    redis_client,
+    match_id: str,
+    market: str = MARKET_1X2,
+) -> list[dict]:
+    """Return full odds history for a match on a specific market, oldest first."""
+    raw_entries = await redis_client.lrange(
+        odds_history_key(match_id, market), 0, -1,
+    )
     return [json.loads(entry) for entry in raw_entries]
 
 

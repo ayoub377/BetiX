@@ -100,42 +100,50 @@ export function useTrackedMatches() {
   return { matches, isLoading: isLoading || isLoadingAuth, error, refetch };
 }
 
-export function useOddsSummary(matchId: string | null) {
+export function useOddsSummary(matchId: string | null, market: string = '1x2') {
   const [data, setData] = useState<OddsSummaryResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchSummary = useCallback(async (id: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await apiClient.get<OddsSummaryResponse>(`/odds/history/${id}/summary`);
-      setData(res.data);
-    } catch (err) {
-      console.error('Failed to fetch odds summary:', err);
-      if (isApiError(err) && err.response?.status === 404) {
-        setError('No odds history found for this match.');
-      } else {
-        setError('Failed to load odds history.');
+  const fetchSummary = useCallback(
+    async (id: string, marketArg: string) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await apiClient.get<OddsSummaryResponse>(
+          `/odds/history/${id}/summary`,
+          { params: { market: marketArg } },
+        );
+        setData(res.data);
+      } catch (err) {
+        console.error('Failed to fetch odds summary:', err);
+        if (isApiError(err) && err.response?.status === 404) {
+          setError('No odds history found for this match.');
+        } else {
+          setError('Failed to load odds history.');
+        }
+        setData(null);
+      } finally {
+        setIsLoading(false);
       }
-      setData(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
+  // Re-fetch when the match OR the selected market changes — both are
+  // user-driven so we don't try to be clever and reuse stale data.
   useEffect(() => {
     if (matchId) {
-      fetchSummary(matchId);
+      fetchSummary(matchId, market);
     } else {
       setData(null);
       setError(null);
     }
-  }, [matchId, fetchSummary]);
+  }, [matchId, market, fetchSummary]);
 
   const refetch = useCallback(() => {
-    if (matchId) fetchSummary(matchId);
-  }, [matchId, fetchSummary]);
+    if (matchId) fetchSummary(matchId, market);
+  }, [matchId, market, fetchSummary]);
 
   return { data, isLoading, error, refetch };
 }

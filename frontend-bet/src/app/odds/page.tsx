@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Activity, Loader2, Plus, RefreshCw, TrendingUp, Users } from 'lucide-react';
 
+import MarketTabs from '@/components/odds/MarketTabs';
 import OddsMatchSelector from '@/components/odds/OddsMatchSelector';
 import OddsSummaryChart from '@/components/odds/OddsSummaryChart';
 import { useAuth } from '@/contexts/AuthContext';
@@ -31,6 +32,13 @@ function OddsPageContent() {
   const searchParams = useSearchParams();
   const initialMatch = searchParams.get('match');
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(initialMatch);
+  // Active market for the chart. Defaults to 1X2 — when the user
+  // switches matches, we reset to 1X2 (every match has 1X2 by definition,
+  // so this is always safe and never lands on a tab that doesn't exist).
+  const [activeMarket, setActiveMarket] = useState<string>('1x2');
+  useEffect(() => {
+    setActiveMarket('1x2');
+  }, [selectedMatchId]);
   const { customUserProfile } = useAuth();
 
   const {
@@ -61,7 +69,12 @@ function OddsPageContent() {
     isLoading: summaryLoading,
     error: summaryError,
     refetch: refetchSummary,
-  } = useOddsSummary(selectedMatchId);
+  } = useOddsSummary(selectedMatchId, activeMarket);
+
+  // Tab strip needs the list of markets this match was configured for.
+  // The summary response carries it; fall back to ['1x2'] until the first
+  // fetch lands so we don't flash an empty strip.
+  const configuredMarkets = oddsSummary?.configured_markets ?? ['1x2'];
 
   return (
     <div className="bg-gray-50 dark:bg-slate-950 font-sans">
@@ -185,6 +198,20 @@ function OddsPageContent() {
             {summaryError && (
               <div className="p-4 text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/30 rounded-lg">
                 {summaryError}
+              </div>
+            )}
+
+            {oddsSummary && (
+              // Render the tab strip outside the summaryLoading gate so
+              // switching markets feels instant — the chart below shows
+              // a spinner while the new market loads, but the user keeps
+              // their tabs visible the whole time.
+              <div className="mb-4">
+                <MarketTabs
+                  configuredMarkets={configuredMarkets}
+                  activeMarket={activeMarket}
+                  onChange={setActiveMarket}
+                />
               </div>
             )}
 

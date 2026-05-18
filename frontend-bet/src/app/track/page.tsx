@@ -7,6 +7,7 @@ import { Activity, AlertTriangle, Clock, Info, Loader2, Lock, Sparkles, Target, 
 import { useAuth } from "@/contexts/AuthContext";
 import { apiClient, isApiError } from "@/lib/apiClient";
 import { groupedLeaguesFor } from "@/lib/leagues";
+import { useMarkets } from "@/hooks/useMarkets";
 
 type Sport = "football" | "tennis";
 
@@ -47,11 +48,49 @@ export default function TrackPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [errorKind, setErrorKind] = useState<"quota" | "kickoff" | "auth" | "other" | null>(null);
 
+  // Markets catalogue + user selection. Tennis is 1X2-only on the backend,
+  // so we hide the checkbox group there. The default selection is the
+  // catalogue's ``is_default`` set (currently just 1X2). 1X2 is always
+  // included on submit — it's the canonical market and disabling it on
+  // the client would just confuse users.
+  const { markets: availableMarkets } = useMarkets();
+  const [selectedMarkets, setSelectedMarkets] = useState<Set<string>>(
+    () => new Set(["1x2"]),
+  );
+
+  // If the catalogue arrives after first render and the user hasn't touched
+  // anything, sync to the catalogue's defaults.
+  const [marketsTouched, setMarketsTouched] = useState(false);
+  useEffect(() => {
+    if (marketsTouched) return;
+    const defaults = new Set(
+      availableMarkets.filter((m) => m.is_default).map((m) => m.id),
+    );
+    if (defaults.size === 0) defaults.add("1x2");
+    setSelectedMarkets(defaults);
+  }, [availableMarkets, marketsTouched]);
+
   // Football leagues and tennis tournaments don't overlap, so reset the
   // competition picker when the sport changes.
   useEffect(() => {
     setSportKey("");
   }, [sport]);
+
+  const toggleMarket = (id: string) => {
+    setMarketsTouched(true);
+    setSelectedMarkets((prev) => {
+      const next = new Set(prev);
+      if (id === "1x2") {
+        // 1X2 is the baseline — refuse to deselect so the backend always
+        // has something to plot in the chart's default tab.
+        next.add("1x2");
+        return next;
+      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const groupedLeagues = useMemo(() => groupedLeaguesFor(sport), [sport]);
   const competitionLabel = sport === "football" ? "Competition" : "Tournament";
@@ -99,6 +138,11 @@ export default function TrackPage() {
       // Skip backend's multi-league fan-out lookup when the bettor has
       // told us exactly which competition to search.
       if (sportKey) body.sport_key = sportKey;
+      // Markets: football only — tennis backend ignores anything other
+      // than 1X2, so we don't bother sending the list.
+      if (sport === "football") {
+        body.markets = Array.from(selectedMarkets);
+      }
 
       const res = await apiClient.post<TrackResponse>("/odds/track", body);
       // Send the user to the Odds page with the new match selected.
@@ -272,6 +316,59 @@ export default function TrackPage() {
               : "Pick a Grand Slam if it's running now — otherwise leave on auto-detect."}
           </p>
         </div>
+
+        {/* Markets — football only (tennis backend ignores anything other
+            than 1X2). Single market makes the entire group redundant, so
+            we hide it until the catalogue exposes a real choice. */}
+        {sport === "football" && availableMarkets.length > 1 && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
+              Markets to track
+            </label>
+            <div className="space-y-2">
+              {availableMarkets.map((m) => {
+                const isOneXTwo = m.id === "1x2";
+                const isChecked = selectedMarkets.has(m.id);
+                return (
+                  <label
+                    key={m.id}
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      isChecked
+                        ? "border-sky-500 bg-sky-50 dark:bg-sky-900/20"
+                        : "border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500"
+                    } ${isOneXTwo ? "cursor-default" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => toggleMarket(m.id)}
+                      disabled={isOneXTwo}
+                      className="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-slate-500 text-sky-500 focus:ring-sky-500 disabled:opacity-60"
+                      aria-label={`Track ${m.label}`}
+                    />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        {m.label}
+                        {isOneXTwo && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                            always on
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                        {m.outcomes.join(" / ")}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              Each extra market is scraped every {pollMinutes} minutes alongside 1X2 —
+              picking more here just means more data on your chart, no extra cost.
+            </p>
+          </div>
+        )}
 
         {/* Optional match ID */}
         <details className="group">

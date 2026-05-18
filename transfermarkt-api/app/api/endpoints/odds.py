@@ -22,6 +22,15 @@ from app.core.quotas import (
     TRACK_POLL_INTERVAL_SECONDS,
     normalize_role,
 )
+from app.models.markets import (
+    DEFAULT_MARKETS,
+    MARKET_1X2,
+    MARKET_LABELS,
+    MARKET_LINE,
+    SUPPORTED_MARKETS,
+    is_supported,
+    outcomes_for,
+)
 from app.models.odds_models import TrackedMatch
 from app.models.users import User
 # from app.models.odds import MatchData, Outcome, H2HMarket, Bookmaker
@@ -78,6 +87,12 @@ class TrackRequest(BaseModel):
     match_id: Optional[str] = None
     sport_key: Optional[str] = None  # e.g. "soccer_epl", "tennis_atp_miami_open"
     sport: SportType = SportType.FOOTBALL  # Defaults to football for backward compatibility
+    # Markets to track for this match. Validated against
+    # ``SUPPORTED_MARKETS``; an empty / missing value defaults to
+    # ``DEFAULT_MARKETS`` (1X2 only) so legacy clients keep working.
+    # Tennis ignores anything other than 1x2 — see /track body for the
+    # explicit override.
+    markets: Optional[list[str]] = None
 
     @field_validator("match_id", mode="before")
     @classmethod
@@ -94,6 +109,32 @@ class TrackRequest(BaseModel):
         and reject invalid/placeholder values like 'string'."""
         from app.services.odds_api.odds_api_client import resolve_sport_key
         return resolve_sport_key(v)
+
+    @field_validator("markets", mode="before")
+    @classmethod
+    def sanitize_markets(cls, v):
+        """Drop unknown / empty values; preserve order, dedupe. None means
+        'use the default' — let the route handler apply it so the source
+        of truth lives in one place."""
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            raise ValueError("markets must be a list of strings.")
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for m in v:
+            if not isinstance(m, str):
+                continue
+            m = m.strip()
+            if not m or m in seen:
+                continue
+            if not is_supported(m):
+                raise ValueError(
+                    f"Unsupported market '{m}'. Allowed: {sorted(SUPPORTED_MARKETS)}",
+                )
+            seen.add(m)
+            ordered.append(m)
+        return ordered or None
 
     def validate_inputs(self):
         """Raises ValueError with a clear message if inputs are unusable."""
@@ -350,39 +391,80 @@ async def track_match(
     meta["user_id"] = str(user.id)
     meta["poll_interval_seconds"] = poll_interval
 
+    # Resolve the markets the user wants tracked. Tennis is 1X2-only, so
+    # we override any other selection — clearer than rejecting the request.
+    if sport == SportType.TENNIS:
+        meta["markets"] = [MARKET_1X2]
+    else:
+        meta["markets"] = body.markets or list(DEFAULT_MARKETS)
+    logger.info("Step 5: markets resolved → %s", meta["markets"])
+
     await register_match(redis_client, match_id, meta)
     logger.info("Step 5 complete: meta stored (poll_interval=%ds).", poll_interval)
 
     # ------------------------------------------------------------------
-    # Step 6 — Store initial odds snapshot (with sharp odds if available)
+    # Step 6 — Store initial odds snapshot per configured market.
+    # The 1X2 snapshot reuses the data we already scraped during meta
+    # resolution. Non-1X2 markets need a fresh scrape because the
+    # FlashScore endpoint is different per market. We do the extra
+    # scrapes inline (synchronously, in a thread pool) so the user sees
+    # data on the chart immediately on the next /history call — without
+    # this, they'd wait a full poll_interval (10–45 min) before the first
+    # O/U snapshot exists.
     # ------------------------------------------------------------------
-    if sport == SportType.TENNIS:
-        has_initial = initial_odds.get("player1") is not None
-    else:
-        has_initial = initial_odds.get("home") is not None
-
-    if has_initial:
-        initial_sharp_odds = None
-        if odds_api_key and meta.get("odds_api_event_id"):
+    for market in meta["markets"]:
+        if market == MARKET_1X2:
+            # Already scraped during meta resolution.
+            if sport == SportType.TENNIS:
+                has_initial = initial_odds.get("player1") is not None
+            else:
+                has_initial = initial_odds.get("home") is not None
+            if not has_initial:
+                logger.info("Step 6: No valid initial 1X2 odds yet for %s.", match_id)
+                continue
+            initial_sharp_odds = None
+            if odds_api_key and meta.get("odds_api_event_id"):
+                try:
+                    from app.services.odds_api.odds_api_client import fetch_sharp_odds
+                    initial_sharp_odds = await loop.run_in_executor(
+                        None, fetch_sharp_odds,
+                        odds_api_key, meta["odds_api_sport_key"],
+                        meta["odds_api_event_id"],
+                        meta.get("home_team", ""), meta.get("away_team", ""),
+                    )
+                except Exception as e:
+                    logger.warning("Step 6: Sharp odds fetch failed: %s", e)
+            await store_odds_snapshot(
+                redis_client, match_id, initial_odds,
+                sport=sport.value,
+                sharp_odds=initial_sharp_odds or None,
+                market=MARKET_1X2,
+            )
+            logger.info("Step 6: Initial 1X2 snapshot stored.")
+        else:
             try:
-                from app.services.odds_api.odds_api_client import fetch_sharp_odds
-                initial_sharp_odds = await loop.run_in_executor(
-                    None, fetch_sharp_odds,
-                    odds_api_key, meta["odds_api_sport_key"],
-                    meta["odds_api_event_id"],
-                    meta.get("home_team", ""), meta.get("away_team", ""),
+                market_odds = await loop.run_in_executor(
+                    None, scraper.get_odds_by_market, match_id, market,
                 )
+                if market_odds.get("over") is None:
+                    logger.info(
+                        "Step 6: No valid initial odds yet for %s on %s.",
+                        match_id, market,
+                    )
+                    continue
+                await store_odds_snapshot(
+                    redis_client, match_id, market_odds,
+                    sport=sport.value,
+                    sharp_odds=None,
+                    market=market,
+                )
+                logger.info("Step 6: Initial %s snapshot stored.", market)
             except Exception as e:
-                logger.warning("Step 6: Sharp odds fetch failed: %s", e)
-
-        await store_odds_snapshot(
-            redis_client, match_id, initial_odds,
-            sport=sport.value,
-            sharp_odds=initial_sharp_odds or None,
-        )
-        logger.info("Step 6: Initial snapshot stored.")
-    else:
-        logger.info("Step 6: No valid initial odds yet.")
+                # One bad market shouldn't block the whole /track call.
+                logger.warning(
+                    "Step 6: Initial scrape for market %s failed: %s",
+                    market, e,
+                )
 
     # ------------------------------------------------------------------
     # Step 7 — Start scheduler at the user's tier-specific cadence.
@@ -562,29 +644,67 @@ async def stream_odds_history(
     )
 
 
+@router.get("/markets")
+async def list_supported_markets() -> dict:
+    """Static catalogue of markets this build of the API knows how to
+    scrape + render. Frontend uses it to populate the per-match checkbox
+    set without hard-coding the list. Public — no auth — so unauthed
+    pricing pages can show "tracks O/U 2.5" without a token round-trip.
+    """
+    return {
+        "markets": [
+            {
+                "id": m,
+                "label": MARKET_LABELS.get(m, m),
+                "outcomes": list(outcomes_for(m)),
+                "line": MARKET_LINE.get(m),
+                "is_default": m in DEFAULT_MARKETS,
+            }
+            for m in SUPPORTED_MARKETS
+        ],
+    }
+
+
 @router.get("/history/{match_id}/summary")
 async def get_match_history_summary(
     match_id: str,
+    market: str = Query(default=MARKET_1X2, description="Market id (e.g. '1x2', 'ou_2.5')"),
     redis_client=Depends(get_redis),
     user: User = Depends(get_current_user),
 ):
-    # 1. Try Redis first (fast, real-time data)
+    # Validate market early — keeps Redis lookups from happening with a
+    # garbage key and produces a clear 422 instead of an empty history.
+    if not is_supported(market):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported market '{market}'. Allowed: {sorted(SUPPORTED_MARKETS)}",
+        )
+
+    # 1. Try Redis first (fast, real-time data) — market-scoped key.
     meta = await get_match_meta(redis_client, match_id)
-    history = await get_odds_history(redis_client, match_id)
+    history = await get_odds_history(redis_client, match_id, market=market)
 
     # 2. Fallback to PostgreSQL when Redis data is gone
     if not history:
-        logger.info("Redis empty for %s — falling back to PostgreSQL.", match_id)
+        logger.info(
+            "Redis empty for %s on market %s — falling back to PostgreSQL.",
+            match_id, market,
+        )
         session = SessionLocal()
         try:
             if not meta:
                 meta = get_match_meta_from_db(session, match_id)
-            history = db_get_snapshots(session, match_id)
+            history = db_get_snapshots(session, match_id, market=market)
         finally:
             session.close()
 
     if not meta and not history:
-        return {"match_id": match_id, "history": [], "message": "No snapshots recorded yet."}
+        return {
+            "match_id": match_id,
+            "market": market,
+            "history": [],
+            "message": "No snapshots recorded yet.",
+        }
 
     # Ownership check — same rationale as the SSE stream above. We hit Redis
     # then DB to resolve meta, and only enforce ownership once we know which
@@ -629,10 +749,14 @@ async def get_match_history_summary(
 
     return {
         "sport": sport,
+        "market": market,
         "match": match_label,
         "start_time": meta.get("start_time"),
         "total_snapshots": len(processed_history),
-        "history": processed_history
+        "history": processed_history,
+        # Surface the configured markets so the frontend tab strip can render
+        # without an extra round-trip.
+        "configured_markets": (meta or {}).get("markets") or list(DEFAULT_MARKETS),
     }
 
 # odds.py — add this route after /tracked
