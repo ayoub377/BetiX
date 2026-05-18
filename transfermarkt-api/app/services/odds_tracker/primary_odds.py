@@ -12,34 +12,52 @@ primary_odds, and the consecutive-snapshot delta.
 """
 from typing import Optional
 
+from app.models.markets import MARKET_1X2
+
 
 PINNACLE_KEY = "pinnacle"
 FLASHSCORE_FALLBACK = "flashscore"
 
 
-def _odds_for_sport(payload: dict, sport: str) -> Optional[dict]:
-    """Pull the (home, draw, away) or (player1, player2) trio from a payload.
+def _odds_for_market(payload: dict, sport: str, market: str) -> Optional[dict]:
+    """Pull the outcome trio/pair for a given (sport, market) from a payload.
 
     Returns None when any required leg is missing or non-positive — partial
-    Pinnacle data is treated as "not available" so we fall back to Betclic
-    rather than render a half-formed price.
+    Pinnacle data is treated as "not available" so we fall back to the
+    FlashScore-scraped book rather than render a half-formed price.
     """
     if not payload:
         return None
 
-    if sport == "tennis":
-        p1 = payload.get("player1")
-        p2 = payload.get("player2")
-        if p1 and p2 and p1 > 1.0 and p2 > 1.0:
-            return {"player1": p1, "player2": p2}
+    # 1X2 — sport-dependent shape.
+    if market == MARKET_1X2:
+        if sport == "tennis":
+            p1 = payload.get("player1")
+            p2 = payload.get("player2")
+            if p1 and p2 and p1 > 1.0 and p2 > 1.0:
+                return {"player1": p1, "player2": p2}
+            return None
+        home = payload.get("home")
+        draw = payload.get("draw")
+        away = payload.get("away")
+        if home and draw and away and home > 1.0 and draw > 1.0 and away > 1.0:
+            return {"home": home, "draw": draw, "away": away}
         return None
 
-    home = payload.get("home")
-    draw = payload.get("draw")
-    away = payload.get("away")
-    if home and draw and away and home > 1.0 and draw > 1.0 and away > 1.0:
-        return {"home": home, "draw": draw, "away": away}
+    # Over/Under (totals). Football-only at the moment. ``line`` is part
+    # of the market id (e.g. "ou_2.5") so we don't include it in the
+    # diff payload — it's metadata, not a price.
+    over = payload.get("over")
+    under = payload.get("under")
+    if over and under and over > 1.0 and under > 1.0:
+        return {"over": over, "under": under}
     return None
+
+
+# Kept for backward compatibility with anything outside this module that
+# still imports it. Internally we use the market-aware version above.
+def _odds_for_sport(payload: dict, sport: str) -> Optional[dict]:
+    return _odds_for_market(payload, sport, MARKET_1X2)
 
 
 def resolve_primary_odds(snapshot: dict) -> dict:
@@ -52,14 +70,18 @@ def resolve_primary_odds(snapshot: dict) -> dict:
     than always claiming "Betclic".
     """
     sport = snapshot.get("sport", "football")
+    market = snapshot.get("market") or MARKET_1X2
     sharp = snapshot.get("sharp_odds") or {}
     pinnacle_payload = sharp.get(PINNACLE_KEY)
 
-    pinnacle_odds = _odds_for_sport(pinnacle_payload, sport)
+    # Pinnacle's sharp data currently only covers 1X2 — see the scheduler
+    # for the reason we don't fetch totals. For non-1X2 markets the sharp
+    # lookup is effectively a no-op until we extend Odds API coverage.
+    pinnacle_odds = _odds_for_market(pinnacle_payload, sport, market)
     if pinnacle_odds is not None:
         return {"primary_source": PINNACLE_KEY, "primary_odds": pinnacle_odds}
 
-    fallback_odds = _odds_for_sport(snapshot, sport)
+    fallback_odds = _odds_for_market(snapshot, sport, market)
     if fallback_odds is not None:
         bookmaker = (snapshot.get("bookmaker") or FLASHSCORE_FALLBACK).strip().lower()
         return {"primary_source": bookmaker, "primary_odds": fallback_odds}

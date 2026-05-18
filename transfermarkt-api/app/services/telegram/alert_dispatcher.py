@@ -39,6 +39,7 @@ import logging
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
+from app.models.markets import MARKET_1X2, label_for, outcomes_for
 from app.services.odds_tracker.odds_tracker import odds_history_key
 from app.services.telegram import bot_client
 from app.settings import settings
@@ -50,13 +51,23 @@ logger = logging.getLogger(__name__)
 # Pure logic — easy to unit-test
 # ────────────────────────────────────────────────────────────────────
 
+# Legacy alias — historically these were the only "markets" the dispatcher
+# knew about (the outcome keys on a 1X2 snapshot). Kept exported so any
+# external caller (e.g. tests) still works.
 FOOTBALL_MARKETS = ("home", "draw", "away")
 TENNIS_MARKETS = ("player1", "player2")
 
 
-def markets_for_sport(sport: str) -> tuple[str, ...]:
-    """Return the outcome keys present on a snapshot for ``sport``."""
-    return TENNIS_MARKETS if sport == "tennis" else FOOTBALL_MARKETS
+def markets_for_sport(sport: str, market: str = MARKET_1X2) -> tuple[str, ...]:
+    """Return the outcome keys present on a snapshot for (sport, market).
+
+    Tennis stays on its existing 1X2 shape; football routes through the
+    central markets registry so adding O/U 3.5 or BTTS later is just a
+    registry entry, not a dispatcher change.
+    """
+    if sport == "tennis":
+        return TENNIS_MARKETS
+    return outcomes_for(market)
 
 
 @dataclass(frozen=True)
@@ -78,16 +89,21 @@ def compute_breaches(
     current: dict,
     sport: str,
     threshold_pct: float,
+    market: str = MARKET_1X2,
 ) -> list[MovementBreach]:
-    """Return every market whose abs % change from opening to current
+    """Return every outcome whose abs % change from opening to current
     exceeds ``threshold_pct``. Robust against missing keys / zero opens.
+
+    ``market`` selects which outcome keys to look at on the snapshots
+    (e.g. for ``ou_2.5`` we diff ``over``/``under`` rather than 1X2 keys).
+    Defaults to 1X2 so legacy callers behave identically.
     """
     if threshold_pct <= 0:
         return []
     breaches: list[MovementBreach] = []
-    for market in markets_for_sport(sport):
-        op = opening.get(market)
-        cu = current.get(market)
+    for outcome in markets_for_sport(sport, market):
+        op = opening.get(outcome)
+        cu = current.get(outcome)
         if op is None or cu is None:
             continue
         try:
@@ -101,7 +117,7 @@ def compute_breaches(
         pct = ((cu_f - op_f) / op_f) * 100.0
         if abs(pct) >= threshold_pct:
             breaches.append(MovementBreach(
-                market=market,
+                market=outcome,
                 direction="up" if pct > 0 else "down",
                 opening_odds=op_f,
                 current_odds=cu_f,
@@ -118,9 +134,14 @@ def format_alert_message(
     breaches: Iterable[MovementBreach],
     bookmaker: Optional[str],
     threshold_pct: float,
+    market: str = MARKET_1X2,
 ) -> str:
     """Render the Telegram message body. HTML parse mode, kept short
     because users will see this on a phone lock-screen.
+
+    Header includes the market label (e.g. "Over/Under 2.5") so the user
+    sees at a glance which line moved — useful when one match is tracked
+    across multiple markets.
     """
     if sport == "tennis":
         title = f"<b>{home_team or 'P1'} vs {away_team or 'P2'}</b>"
@@ -133,10 +154,16 @@ def format_alert_message(
         "away": "Away",
         "player1": home_team or "Player 1",
         "player2": away_team or "Player 2",
+        "over": "Over",
+        "under": "Under",
     }
     arrows = {"up": "▲", "down": "▼"}
 
-    lines = [title, f"<i>Threshold: ±{threshold_pct:g}% from opening</i>", ""]
+    lines = [
+        title,
+        f"<i>{label_for(market)} · threshold ±{threshold_pct:g}% from opening</i>",
+        "",
+    ]
     for b in breaches:
         lines.append(
             f"{arrows[b.direction]} {pretty.get(b.market, b.market)}: "
@@ -153,16 +180,27 @@ def format_alert_message(
 # I/O helpers
 # ────────────────────────────────────────────────────────────────────
 
-def _alerted_set_key(user_id: str, match_id: str) -> str:
-    return f"telegram_alerted:{user_id}:{match_id}"
+def _alerted_set_key(user_id: str, match_id: str, market: str) -> str:
+    """Dedupe set key, scoped per (user, match, market) so an O/U breach
+    doesn't dedupe a later 1X2 breach on the same match.
 
-
-async def _get_opening_snapshot(redis_client, match_id: str) -> Optional[dict]:
-    """First snapshot in Redis history for this match. Returns None if the
-    history is empty (e.g. we're processing the very first scrape and
-    haven't appended yet — caller should skip).
+    The 1X2 key keeps its legacy shape (no market suffix) so dedupe state
+    persisted before the multi-market rollout still applies — avoids a
+    spam burst on the first scrape after deploy.
     """
-    raw = await redis_client.lindex(odds_history_key(match_id), 0)
+    if market == MARKET_1X2:
+        return f"telegram_alerted:{user_id}:{match_id}"
+    return f"telegram_alerted:{user_id}:{match_id}:{market}"
+
+
+async def _get_opening_snapshot(
+    redis_client, match_id: str, market: str = MARKET_1X2,
+) -> Optional[dict]:
+    """First snapshot in Redis history for this (match, market). Returns
+    None if the history is empty (e.g. we're processing the very first
+    scrape and haven't appended yet — caller should skip).
+    """
+    raw = await redis_client.lindex(odds_history_key(match_id, market), 0)
     if raw is None:
         return None
     if isinstance(raw, bytes):
@@ -174,17 +212,17 @@ async def _get_opening_snapshot(redis_client, match_id: str) -> Optional[dict]:
 
 
 async def _already_alerted(
-    redis_client, user_id: str, match_id: str, dedupe_key: str,
+    redis_client, user_id: str, match_id: str, market: str, dedupe_key: str,
 ) -> bool:
     return bool(await redis_client.sismember(
-        _alerted_set_key(user_id, match_id), dedupe_key,
+        _alerted_set_key(user_id, match_id, market), dedupe_key,
     ))
 
 
 async def _mark_alerted(
-    redis_client, user_id: str, match_id: str, dedupe_key: str,
+    redis_client, user_id: str, match_id: str, market: str, dedupe_key: str,
 ) -> None:
-    key = _alerted_set_key(user_id, match_id)
+    key = _alerted_set_key(user_id, match_id, market)
     await redis_client.sadd(key, dedupe_key)
     # Re-apply TTL on every write so an actively-moving match doesn't drop
     # the dedupe state mid-game.
@@ -202,11 +240,16 @@ async def maybe_dispatch_alert(
     new_snapshot: dict,
     match_meta: dict,
     sport: str,
+    market: str = MARKET_1X2,
 ) -> None:
     """Best-effort alert delivery. Never raises into the caller.
 
     ``match_meta`` is the dict stored under ``tracked_match:<id>`` in Redis;
     it carries ``user_id``, ``home_team``, ``away_team`` etc.
+
+    ``market`` scopes the opening lookup and the dedupe key so a user
+    tracking both 1X2 and O/U gets one alert per (market, outcome,
+    direction) rather than cross-talk between markets.
     """
     try:
         user_id = match_meta.get("user_id")
@@ -221,9 +264,9 @@ async def maybe_dispatch_alert(
         if not prefs or not prefs.enabled:
             return
 
-        opening = await _get_opening_snapshot(redis_client, match_id)
+        opening = await _get_opening_snapshot(redis_client, match_id, market=market)
         if opening is None or opening.get("timestamp") == new_snapshot.get("timestamp"):
-            # First-ever snapshot — there's no movement to detect yet.
+            # First-ever snapshot for this market — no movement to detect yet.
             return
 
         breaches = compute_breaches(
@@ -231,14 +274,18 @@ async def maybe_dispatch_alert(
             current=new_snapshot,
             sport=sport,
             threshold_pct=prefs.threshold_pct,
+            market=market,
         )
         if not breaches:
             return
 
-        # Dedupe — drop any breach whose (market, direction) already fired.
+        # Dedupe — drop any breach whose (market, outcome, direction)
+        # already fired within the cooldown window.
         fresh: list[MovementBreach] = []
         for b in breaches:
-            if not await _already_alerted(redis_client, user_id, match_id, b.dedupe_key):
+            if not await _already_alerted(
+                redis_client, user_id, match_id, market, b.dedupe_key,
+            ):
                 fresh.append(b)
         if not fresh:
             return
@@ -250,19 +297,22 @@ async def maybe_dispatch_alert(
             breaches=fresh,
             bookmaker=new_snapshot.get("bookmaker"),
             threshold_pct=prefs.threshold_pct,
+            market=market,
         )
         sent = await bot_client.send_message(prefs.chat_id, msg)
         if sent:
             for b in fresh:
-                await _mark_alerted(redis_client, user_id, match_id, b.dedupe_key)
+                await _mark_alerted(
+                    redis_client, user_id, match_id, market, b.dedupe_key,
+                )
             logger.info(
-                "Dispatched Telegram alert: user=%s match=%s breaches=%s",
-                user_id, match_id, [b.dedupe_key for b in fresh],
+                "Dispatched Telegram alert: user=%s match=%s market=%s breaches=%s",
+                user_id, match_id, market, [b.dedupe_key for b in fresh],
             )
         else:
             logger.warning(
-                "Telegram send failed; will retry on next scrape: user=%s match=%s",
-                user_id, match_id,
+                "Telegram send failed; will retry on next scrape: user=%s match=%s market=%s",
+                user_id, match_id, market,
             )
     except Exception as e:
         # We MUST NOT let an alerting bug crash the scrape job.

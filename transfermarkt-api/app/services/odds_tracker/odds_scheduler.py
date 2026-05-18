@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from app.models.markets import DEFAULT_MARKETS, MARKET_1X2, MARKET_LINE, is_supported
 from app.services.odds_tracker.odds_tracker import (
     store_odds_snapshot, get_match_meta,
     unregister_match, update_match_meta_field, TRACKED_INDEX_KEY,
@@ -29,6 +30,22 @@ def _fetch_sharp_odds_sync(api_key, sport_key, event_id, home_team, away_team):
         return fetch_sharp_odds(api_key, sport_key, event_id, home_team, away_team)
     except Exception as e:
         logger.warning("Sharp odds fetch failed: %s", e)
+        return {}
+
+
+def _fetch_totals_odds_sync(api_key, sport_key, event_id, line):
+    """Fetch Over/Under totals odds (sync, runs in thread pool).
+
+    Used for non-1X2 markets — we hit The Odds API directly rather than
+    re-scraping FlashScore's totals sub-page. Trades a ~1 credit/match/tick
+    Odds API cost for a much more reliable + faster fetch (no Selenium,
+    structured JSON, Pinnacle included).
+    """
+    try:
+        from app.services.odds_api.odds_api_client import fetch_totals_odds
+        return fetch_totals_odds(api_key, sport_key, event_id, line=line)
+    except Exception as e:
+        logger.warning("Totals odds fetch failed: %s", e)
         return {}
 
 
@@ -129,31 +146,97 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                         )
                     return
 
-        try:
-            loop = asyncio.get_event_loop()
-            odds = await loop.run_in_executor(
-                io_executor,
-                scraper.get_odds_by_match_id,
-                match_id
-            )
+        # ── Scrape each configured market ───────────────────────────
+        # Tennis stays on 1X2 only — non-1X2 markets are football-specific
+        # for now (BTTS / OU / etc.). Football honours whatever the user
+        # configured at /track time, defaulting to 1X2 only for legacy
+        # rows that pre-date the markets column.
+        configured = meta.get("markets") if meta else None
+        if sport == "tennis":
+            markets_to_scrape = [MARKET_1X2]
+        elif configured:
+            markets_to_scrape = [m for m in configured if is_supported(m)]
+            if not markets_to_scrape:
+                markets_to_scrape = list(DEFAULT_MARKETS)
+        else:
+            markets_to_scrape = list(DEFAULT_MARKETS)
 
-            # Sport-aware validity check
-            if sport == "tennis":
-                has_valid_odds = odds.get("player1") is not None
-            else:
-                has_valid_odds = odds.get("home") is not None
+        loop = asyncio.get_event_loop()
+        api_key = os.environ.get("ODDS_API_KEY")
 
-            if has_valid_odds:
-                # Fetch sharp bookmaker odds if Odds API is configured
+        for market in markets_to_scrape:
+            try:
+                if sport == "tennis" or market == MARKET_1X2:
+                    # 1X2 (and all tennis) → FlashScore scrape.
+                    odds = await loop.run_in_executor(
+                        io_executor, scraper.get_odds_by_match_id, match_id,
+                    )
+                else:
+                    # Football, non-1X2 (currently Over/Under). We route
+                    # this through The Odds API rather than FlashScore for
+                    # three reasons: (a) totals scraping is fragile against
+                    # FlashScore DOM changes, (b) the API gives us Pinnacle
+                    # for free as the primary book, (c) one HTTPS call is
+                    # ~50× faster than a fresh Selenium navigation.
+                    #
+                    # Requires the match to be mapped to an Odds API event
+                    # (we do that lookup at /track time). Matches without
+                    # an event_id silently skip non-1X2 markets and the
+                    # /odds/track endpoint warns the user up front.
+                    if not api_key or not meta:
+                        logger.debug(
+                            "Skipping market %s for %s: no Odds API key configured.",
+                            market, match_id,
+                        )
+                        continue
+                    event_id = meta.get("odds_api_event_id")
+                    sport_key = meta.get("odds_api_sport_key")
+                    if not event_id or not sport_key:
+                        logger.warning(
+                            "Skipping market %s for %s: match not mapped to an Odds API event.",
+                            market, match_id,
+                        )
+                        continue
+                    line = MARKET_LINE.get(market)
+                    if line is None:
+                        # Future-proofing: e.g. BTTS has no line — caller
+                        # would route through a different fetcher entirely.
+                        logger.debug(
+                            "Skipping market %s for %s: no line configured.",
+                            market, match_id,
+                        )
+                        continue
+                    odds = await loop.run_in_executor(
+                        io_executor, _fetch_totals_odds_sync,
+                        api_key, sport_key, event_id, line,
+                    )
+
+                # Per-market validity check
+                if sport == "tennis":
+                    has_valid = odds.get("player1") is not None
+                elif market == MARKET_1X2:
+                    has_valid = odds.get("home") is not None
+                else:
+                    has_valid = odds.get("over") is not None
+
+                if not has_valid:
+                    logger.warning(
+                        "No valid odds returned for match %s (%s/%s)",
+                        match_id, sport, market,
+                    )
+                    continue
+
+                # Sharp odds (Odds API) only cover 1X2 for now. When we
+                # wire totals/btts to the Odds API we can extend this — for
+                # now keep them at None on non-1X2 snapshots so the chart
+                # doesn't draw a meaningless sharp series.
                 sharp_odds = {}
-                api_key = os.environ.get("ODDS_API_KEY")
-                if api_key and meta:
+                if api_key and meta and market == MARKET_1X2:
                     event_id = meta.get("odds_api_event_id")
                     sport_key = meta.get("odds_api_sport_key")
                     if event_id and sport_key:
                         sharp_odds = await loop.run_in_executor(
-                            io_executor,
-                            _fetch_sharp_odds_sync,
+                            io_executor, _fetch_sharp_odds_sync,
                             api_key, sport_key, event_id,
                             meta.get("home_team", ""), meta.get("away_team", ""),
                         )
@@ -162,11 +245,10 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                     redis_client, match_id, odds,
                     sport=sport,
                     sharp_odds=sharp_odds or None,
+                    market=market,
                 )
 
-                # Fire Telegram alerts on threshold breach. Best-effort —
-                # never raises into this job. Only does work if the
-                # match's owner is premium and has alerts wired up.
+                # Telegram alert dispatch — best-effort, per market.
                 try:
                     from app.services.telegram.alert_dispatcher import maybe_dispatch_alert
                     if meta:
@@ -176,13 +258,19 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                             new_snapshot=snapshot,
                             match_meta=meta,
                             sport=sport,
+                            market=market,
                         )
                 except Exception as e:
-                    logger.warning("Telegram alert dispatch failed for %s: %s", match_id, e)
-            else:
-                logger.warning("No valid odds returned for match %s (%s)", match_id, sport)
-        except Exception as e:
-            logger.error("Scrape job failed for match %s: %s", match_id, e, exc_info=True)
+                    logger.warning(
+                        "Telegram alert dispatch failed for %s (market=%s): %s",
+                        match_id, market, e,
+                    )
+            except Exception as e:
+                # A single bad market shouldn't kill the rest of the tick.
+                logger.error(
+                    "Scrape job failed for match %s market %s: %s",
+                    match_id, market, e, exc_info=True,
+                )
 
     return scrape_job
 

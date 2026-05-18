@@ -39,6 +39,17 @@ _SOFT_MIGRATIONS = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_alerts_enabled BOOLEAN NOT NULL DEFAULT FALSE",
     'ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_alert_threshold_pct DOUBLE PRECISION',
     'CREATE INDEX IF NOT EXISTS ix_users_telegram_chat_id ON users (telegram_chat_id)',
+    # Multi-market tracking. Each scrape now writes one snapshot per
+    # configured market; legacy 1X2-only rows get 'market = 1x2' via the
+    # NOT NULL DEFAULT clause, so the index below sees a consistent shape.
+    "ALTER TABLE odds_snapshots ADD COLUMN IF NOT EXISTS market VARCHAR(20) NOT NULL DEFAULT '1x2'",
+    'ALTER TABLE odds_snapshots ADD COLUMN IF NOT EXISTS over DOUBLE PRECISION',
+    'ALTER TABLE odds_snapshots ADD COLUMN IF NOT EXISTS under DOUBLE PRECISION',
+    'ALTER TABLE odds_snapshots ADD COLUMN IF NOT EXISTS line DOUBLE PRECISION',
+    'CREATE INDEX IF NOT EXISTS ix_odds_snapshots_match_market_id ON odds_snapshots (match_id, market, id)',
+    # JSON list of markets per tracked match. NULL means "legacy 1X2-only",
+    # so we don't need to backfill before deploying.
+    'ALTER TABLE tracked_matches ADD COLUMN IF NOT EXISTS markets TEXT',
 )
 
 

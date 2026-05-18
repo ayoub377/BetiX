@@ -9,13 +9,22 @@ export interface SharpBookmakerOdds {
 export interface OddsSnapshot {
   timestamp: string;
   sport: string;
+  // Market id ("1x2" | "ou_2.5" | …). Optional for backward-compat with
+  // snapshots persisted before the multi-market column existed.
+  market?: string;
   bookmaker: string;
-  home: number;
-  draw: number;
-  away: number;
+  // 1X2 outcomes (populated when market === "1x2" or omitted for
+  // pre-multi-market rows).
+  home?: number;
+  draw?: number;
+  away?: number;
   // Tennis fields (optional)
   player1?: number;
   player2?: number;
+  // Totals fields (populated when market starts with "ou_").
+  over?: number;
+  under?: number;
+  line?: number;
   sharp_odds?: Record<string, SharpBookmakerOdds>;
   // Backend-resolved canonical odds for change indicators.
   // Pinnacle when available, otherwise the FlashScore bookmaker.
@@ -29,6 +38,11 @@ export interface OddsSnapshot {
 
 export interface OddsSummaryResponse {
   sport: string;
+  // Market id this response is filtered to.
+  market?: string;
+  // Markets this tracked match was configured for at /track time.
+  // The frontend uses this to render the per-match tab strip.
+  configured_markets?: string[];
   match: string;
   start_time: string | null;
   total_snapshots: number;

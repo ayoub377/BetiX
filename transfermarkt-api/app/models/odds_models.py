@@ -26,6 +26,11 @@ class TrackedMatch(Base):
     # startup recovery path in main.py can re-schedule jobs at the right
     # cadence after a restart, even if we change the tier matrix later.
     poll_interval_seconds = Column(Integer, nullable=True)
+    # JSON-encoded list of market ids the user wants tracked for this
+    # match (e.g. '["1x2", "ou_2.5"]'). Legacy rows are NULL, treated as
+    # ["1x2"] by the scheduler so behaviour is unchanged. See
+    # app/models/markets.py for the supported set.
+    markets = Column(Text, nullable=True)
 
 
 class OddsSnapshot(Base):
@@ -35,18 +40,31 @@ class OddsSnapshot(Base):
     match_id = Column(String(50), nullable=False, index=True)
     sport = Column(String(50), default="football")
     timestamp = Column(String(100), nullable=False)
+    # Market this snapshot belongs to. Defaults to '1x2' so existing rows
+    # written before multi-market support are categorised correctly.
+    market = Column(String(20), nullable=False, default="1x2", server_default="1x2", index=True)
+    # 1X2 outcomes (also used as a sentinel: NULL when market != '1x2')
     home = Column(Float, nullable=True)
     draw = Column(Float, nullable=True)
     away = Column(Float, nullable=True)
     # Tennis fields (nullable — only populated for tennis)
     player1 = Column(Float, nullable=True)
     player2 = Column(Float, nullable=True)
+    # Totals (Over/Under) outcomes. Populated when market starts with 'ou_'.
+    # 'line' carries the numeric handicap (e.g. 2.5) — kept even though
+    # it's encoded in the market id so analytical queries don't have to
+    # parse strings.
+    over = Column(Float, nullable=True)
+    under = Column(Float, nullable=True)
+    line = Column(Float, nullable=True)
     bookmaker = Column(String(255))
     # JSON-encoded sharp bookmaker odds (nullable for backward compat)
     sharp_odds = Column(Text, nullable=True)
 
     __table_args__ = (
         Index("ix_odds_snapshots_match_id_id", "match_id", "id"),
+        # Hot query: "give me history for match X on market Y, in order".
+        Index("ix_odds_snapshots_match_market_id", "match_id", "market", "id"),
     )
 
 

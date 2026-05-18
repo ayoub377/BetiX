@@ -24,6 +24,12 @@ import {
   formatPrimarySource,
 } from '@/types/odds';
 
+// Totals (Over/Under) outcomes — added once we shipped multi-market.
+// Mirror the backend's MARKET_OUTCOMES["ou_2.5"] entry.
+type TotalsOutcomeKey = 'over' | 'under';
+const TOTALS_OUTCOMES: TotalsOutcomeKey[] = ['over', 'under'];
+type AnyOutcomeKey = OutcomeKey | TotalsOutcomeKey;
+
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -43,6 +49,15 @@ const OUTCOME_COLORS: Record<string, { main: string; bg: string }> = {
   away:    { main: 'rgb(239, 68, 68)',  bg: 'rgba(239, 68, 68, 0.08)' },   // red
   player1: { main: 'rgb(34, 197, 94)',  bg: 'rgba(34, 197, 94, 0.08)' },   // green
   player2: { main: 'rgb(239, 68, 68)',  bg: 'rgba(239, 68, 68, 0.08)' },   // red
+  // Totals — distinct hues from 1X2 so the chart stays readable when
+  // users compare markets back-to-back.
+  over:    { main: 'rgb(245, 158, 11)', bg: 'rgba(245, 158, 11, 0.08)' },  // amber
+  under:   { main: 'rgb(99, 102, 241)', bg: 'rgba(99, 102, 241, 0.08)' },  // indigo
+};
+
+const TOTALS_OUTCOME_LABELS: Record<TotalsOutcomeKey, string> = {
+  over: 'Over',
+  under: 'Under',
 };
 
 const SHARP_COLORS: Record<string, string> = {
@@ -59,10 +74,21 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
   const { history, sport } = summary;
   const isTennis = sport === 'tennis';
 
-  const outcomes: OutcomeKey[] = isTennis ? TENNIS_OUTCOMES : FOOTBALL_OUTCOMES;
+  // Which outcome set is on this chart depends on the market the parent
+  // selected. We derive it from `summary.market` (1x2 by default) so the
+  // chart can be reused unchanged for every market.
+  const isTotals = (summary.market ?? '1x2').startsWith('ou_');
 
-  // Build dynamic labels for tennis using player names from match label
-  const outcomeDisplayLabels = useMemo(() => {
+  const outcomes: AnyOutcomeKey[] = isTotals
+    ? TOTALS_OUTCOMES
+    : isTennis
+      ? TENNIS_OUTCOMES
+      : FOOTBALL_OUTCOMES;
+
+  // Build dynamic labels — tennis uses player names from match label;
+  // totals uses fixed Over/Under.
+  const outcomeDisplayLabels = useMemo<Record<string, string>>(() => {
+    if (isTotals) return { ...OUTCOME_LABELS, ...TOTALS_OUTCOME_LABELS };
     if (!isTennis) return OUTCOME_LABELS;
     // summary.match is "Player1 vs Player2"
     const parts = summary.match.split(' vs ');
@@ -71,9 +97,15 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
       player1: parts[0]?.trim() || 'Player 1',
       player2: parts[1]?.trim() || 'Player 2',
     };
-  }, [isTennis, summary.match]);
+  }, [isTennis, isTotals, summary.match]);
 
-  const [activeOutcome, setActiveOutcome] = useState<OutcomeKey>(outcomes[0]);
+  // ``activeOutcome`` resets whenever the market changes so we don't end
+  // up displaying e.g. "home" while looking at an O/U chart.
+  const [activeOutcome, setActiveOutcome] = useState<AnyOutcomeKey>(outcomes[0]);
+  React.useEffect(() => {
+    setActiveOutcome(outcomes[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary.market]);
 
   // Extract which sharp bookmakers appear in the data
   const availableSharps = useMemo(() => {
@@ -115,9 +147,10 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
       },
     ];
 
-    // Sharp bookmaker lines (dashed) — only for football outcomes
-    // Sharp odds use home/draw/away keys even when the main snapshot uses player1/player2
-    if (showSharpOdds && !isTennis) {
+    // Sharp bookmaker lines (dashed) — only for 1X2 football. Sharp
+    // coverage for totals isn't wired through Odds API yet, so there's
+    // nothing to plot there.
+    if (showSharpOdds && !isTennis && !isTotals) {
       availableSharps.forEach((sharpKey) => {
         const sharpData = history.map(
           (s) => s.sharp_odds?.[sharpKey]?.[activeOutcome as 'home' | 'draw' | 'away'] ?? null
@@ -142,7 +175,7 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
     }
 
     return { labels: timestamps, datasets };
-  }, [history, activeOutcome, showSharpOdds, availableSharps, isTennis, outcomeDisplayLabels]);
+  }, [history, activeOutcome, showSharpOdds, availableSharps, isTennis, isTotals, outcomeDisplayLabels]);
 
   const chartOptions = useMemo(
     () => ({
@@ -293,7 +326,7 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
           );
         })}
 
-        {availableSharps.length > 0 && !isTennis && (
+        {availableSharps.length > 0 && !isTennis && !isTotals && (
           <label className="ml-auto flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -337,8 +370,8 @@ export default function OddsSummaryChart({ summary }: OddsSummaryChartProps) {
         </div>
       </div>
 
-      {/* Sharp odds info callout — only for football */}
-      {availableSharps.length > 0 && showSharpOdds && !isTennis && (
+      {/* Sharp odds info callout — only for 1X2 football */}
+      {availableSharps.length > 0 && showSharpOdds && !isTennis && !isTotals && (
         <div className="flex items-start gap-3 p-4 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800/30 rounded-lg text-sm text-indigo-700 dark:text-indigo-300">
           <svg className="w-5 h-5 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
