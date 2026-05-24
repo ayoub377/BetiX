@@ -69,6 +69,33 @@ class DataNotFoundError(Exception):
 # --- 1. Data Loading and Combination (League Specific) ---
 
 
+def _safe_csv_filename(filename: str) -> str:
+    """Validate ``filename`` as a CSV basename suitable for direct path joining.
+
+    Rejects anything containing a path separator, ``..``, leading dot, or a
+    non-``.csv`` extension. Returns the cleaned name on success. Used by the
+    delete path because the caller-supplied filename lands straight into a
+    filesystem / blob-storage path — without this guard, ``../../etc/passwd``
+    or ``../other_league/E0.csv`` would be a valid input.
+    """
+    name = (filename or "").strip()
+    if not name:
+        raise ValueError("Filename is required.")
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValueError(
+            "Filename must not contain path separators or '..'."
+        )
+    if name.startswith("."):
+        raise ValueError("Filename must not start with '.'.")
+    if not name.lower().endswith(".csv"):
+        raise ValueError("Only .csv files are accepted.")
+    # Path(name).name strips any residual directory component the regex
+    # above might somehow miss (defence in depth).
+    if Path(name).name != name:
+        raise ValueError("Filename must not include directory components.")
+    return name
+
+
 class _LocalDataSource:
     """Reads/writes league CSVs on the local filesystem."""
 
@@ -121,6 +148,47 @@ class _LocalDataSource:
             raise ValueError("Only .csv files are allowed.")
         target = folder / safe_name
         target.write_bytes(content)
+        return str(target)
+
+    def list_csvs(self, league_name: str) -> List[Dict[str, Any]]:
+        """List CSVs in this league's folder with size + last-modified info.
+
+        Returned dicts use JSON-friendly types (str, int, datetime) so the
+        API layer can wrap them in a Pydantic model without conversion.
+        Sorted alphabetically for a stable UI ordering. Returns ``[]`` when
+        the league folder doesn't exist — the dashboard can render an
+        empty state without a separate existence check.
+        """
+        folder = self._base / league_name
+        if not folder.is_dir():
+            return []
+        out: List[Dict[str, Any]] = []
+        for f in sorted(folder.glob(self._pattern)):
+            stat = f.stat()
+            out.append({
+                "filename": f.name,
+                "size_bytes": stat.st_size,
+                "last_modified": datetime.datetime.fromtimestamp(
+                    stat.st_mtime, tz=datetime.timezone.utc,
+                ),
+            })
+        return out
+
+    def delete_csv(self, league_name: str, filename: str) -> str:
+        """Delete a single CSV from a league folder by filename.
+
+        Raises ``DataNotFoundError`` when the file does not exist so the
+        API layer gets a clean 404. Filename is run through
+        :func:`_safe_csv_filename` first because admin-supplied input
+        is concatenated directly into a filesystem path.
+        """
+        safe_name = _safe_csv_filename(filename)
+        target = self._base / league_name / safe_name
+        if not target.is_file():
+            raise DataNotFoundError(
+                f"CSV '{safe_name}' not found for league '{league_name}'."
+            )
+        target.unlink()
         return str(target)
 
 
@@ -183,6 +251,45 @@ class _GCSDataSource:
         blob_name = f"{self._prefix}/{league_name}/{safe_name}"
         blob = self._bucket.blob(blob_name)
         blob.upload_from_string(content, content_type="text/csv")
+        return f"gs://{self._bucket_name}/{blob_name}"
+
+    def list_csvs(self, league_name: str) -> List[Dict[str, Any]]:
+        """List CSV blobs under this league's prefix with metadata.
+
+        ``blob.size`` and ``blob.updated`` are populated by ``list_blobs``
+        so no extra round-trip per file. Sorted by filename for stable
+        ordering — matches the local data source's contract.
+        """
+        prefix = f"{self._prefix}/{league_name}/"
+        out: List[Dict[str, Any]] = []
+        for blob in self._client.list_blobs(self._bucket, prefix=prefix):
+            if not blob.name.lower().endswith(".csv"):
+                continue
+            out.append({
+                "filename": blob.name.rsplit("/", 1)[-1],
+                "size_bytes": int(blob.size or 0),
+                "last_modified": blob.updated,
+            })
+        out.sort(key=lambda d: d["filename"])
+        return out
+
+    def delete_csv(self, league_name: str, filename: str) -> str:
+        """Delete a single CSV blob by filename.
+
+        Raises ``DataNotFoundError`` when the blob doesn't exist. We use
+        ``blob.exists()`` + ``blob.delete()`` rather than ``delete()`` alone
+        because the Cloud Storage client raises ``NotFound`` on a missing
+        blob — translating that to our domain exception keeps the API
+        layer agnostic to the backend.
+        """
+        safe_name = _safe_csv_filename(filename)
+        blob_name = f"{self._prefix}/{league_name}/{safe_name}"
+        blob = self._bucket.blob(blob_name)
+        if not blob.exists():
+            raise DataNotFoundError(
+                f"CSV '{safe_name}' not found for league '{league_name}'."
+            )
+        blob.delete()
         return f"gs://{self._bucket_name}/{blob_name}"
 
 

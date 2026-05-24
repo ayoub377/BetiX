@@ -61,6 +61,19 @@ class UploadResponse(BaseModel):
     stored_at: str
 
 
+class CsvFileInfo(BaseModel):
+    """One row in the admin's per-league CSV listing."""
+    filename: str
+    size_bytes: int
+    last_modified: Optional[datetime.datetime]
+
+
+class DeleteCsvResponse(BaseModel):
+    league: str
+    filename: str
+    deleted_from: str
+
+
 class TrainAdminResponse(BaseModel):
     status: str
     message: str
@@ -144,6 +157,71 @@ async def upload_league_csv(
         filename=Path(filename).name,
         rows=len(df),
         stored_at=stored_at,
+    )
+
+
+@router.get("/leagues/{league}/csvs", response_model=List[CsvFileInfo])
+def list_league_csvs(
+    league: str,
+    _admin: User = Depends(require_role("admin")),
+):
+    """List every CSV currently stored for a league, with size + mtime.
+
+    Powers the "manage uploads" panel in the admin UI — the admin needs
+    to see which weekly file is already there before deciding whether to
+    delete + re-upload an updated copy. Returns an empty list (200) when
+    the league folder hasn't been created yet, rather than a 404, so the
+    UI can render the "no files yet" state generically.
+    """
+    slug = _validate_league_slug(league)
+    ds = _get_data_source()
+    try:
+        rows = ds.list_csvs(slug)
+    except Exception as e:
+        logging.exception("Failed to list CSVs for league %s", slug)
+        raise HTTPException(status_code=500, detail=f"Storage error: {e}")
+    return [CsvFileInfo(**r) for r in rows]
+
+
+@router.delete(
+    "/leagues/{league}/csvs/{filename}",
+    response_model=DeleteCsvResponse,
+)
+def delete_league_csv(
+    league: str,
+    filename: str,
+    _admin: User = Depends(require_role("admin")),
+):
+    """Delete a single CSV from a league folder.
+
+    Intended workflow: each weekly football-data.co.uk drop has the same
+    filename (e.g. ``E0.csv``) but the row count grows. Uploading a new
+    file with the same name **overwrites** in place, so duplicates only
+    happen when the *filename* differs from the prior upload (a renamed
+    weekly file, an old season-snapshot left over from the prior cycle,
+    etc.). This endpoint is the cleanup lever for that case.
+
+    The trained model is left alone — call ``POST /leagues/{league}/train``
+    afterwards to regenerate it with the cleaned data.
+    """
+    slug = _validate_league_slug(league)
+    ds = _get_data_source()
+    try:
+        deleted_from = ds.delete_csv(slug, filename)
+    except DataNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        # _safe_csv_filename rejects bad input — surface as 400.
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.exception(
+            "Failed to delete CSV '%s' for league %s", filename, slug,
+        )
+        raise HTTPException(status_code=500, detail=f"Storage error: {e}")
+    return DeleteCsvResponse(
+        league=slug,
+        filename=filename,
+        deleted_from=deleted_from,
     )
 
 
