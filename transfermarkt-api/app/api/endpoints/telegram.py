@@ -83,6 +83,54 @@ class PreferencesUpdate(BaseModel):
     enabled: Optional[bool] = None
 
 
+class SimulateAlertRequest(BaseModel):
+    """Knobs for /telegram/simulate — every field has a sensible default
+    so the endpoint can be called with an empty body to mean "send me a
+    20% drop on the home outcome of a fake match."
+    """
+    pct: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=99.0,
+        description="Absolute % move to simulate. The endpoint manufactures "
+        "opening + current snapshots whose ratio yields this exact pct.",
+    )
+    direction: str = Field(
+        default="down",
+        description="'down' (odds shorten — favourite firmed up) or "
+        "'up' (odds drift — value appeared).",
+        pattern="^(up|down)$",
+    )
+    market: str = Field(
+        default="1x2",
+        description="Market id (see app.models.markets). '1x2' or 'ou_2.5'.",
+    )
+    outcome: str = Field(
+        default="home",
+        description="Which outcome on the chosen market the simulated "
+        "move lands on (e.g. 'home', 'over').",
+    )
+    sport: str = Field(default="football", pattern="^(football|tennis)$")
+    home_team: str = Field(default="Real Madrid")
+    away_team: str = Field(default="Barcelona")
+
+
+class SimulateAlertResponse(BaseModel):
+    """Returned to the caller so they can confirm the pipeline worked
+    even before they look at Telegram. ``message`` is the exact body
+    that was posted — useful for screenshotting in bug reports.
+    """
+    delivered: bool
+    chat_id_suffix: str
+    market: str
+    outcome: str
+    direction: str
+    opening_odds: float
+    current_odds: float
+    pct: float
+    message: str
+
+
 # ────────────────────────────────────────────────────────────────────
 # Routes — authenticated user surface
 # ────────────────────────────────────────────────────────────────────
@@ -166,6 +214,144 @@ async def send_test_alert(user: User = Depends(get_current_user)) -> dict:
             ),
         )
     return {"ok": True}
+
+
+@router.post("/simulate", response_model=SimulateAlertResponse)
+async def simulate_alert(
+    payload: SimulateAlertRequest = SimulateAlertRequest(),
+    user: User = Depends(get_current_user),
+) -> SimulateAlertResponse:
+    """Send a real alert through the dispatcher pipeline against synthetic
+    snapshots — same code path as a production breach, just with hand-crafted
+    inputs.
+
+    Why this exists vs ``/test``: ``/test`` only proves the bot client can
+    talk to Telegram with a hardcoded string. It does NOT exercise
+    ``compute_breaches`` or ``format_alert_message``, so a bug in the
+    detection logic or message template would slip past it. ``/simulate``
+    builds an (opening, current) snapshot pair guaranteed to produce a
+    breach of the requested ``pct`` on the requested outcome, then runs
+    those snapshots through the real dispatcher helpers and dispatches
+    via the same ``bot_client.send_message`` used in production.
+
+    Admin-only (not just premium) because it bypasses the user's
+    configured threshold and dedupe state — handy for QA, dangerous if
+    exposed broadly. The user's own ``telegram_chat_id`` is still the
+    delivery target, so you only spam yourself.
+    """
+    # Admin-only — see docstring.
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Simulation is admin-only. Use POST /telegram/test for a "
+            "non-simulated delivery check.",
+        )
+    if not user.telegram_chat_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Link your Telegram account before running a simulation.",
+        )
+
+    # Lazy import so the endpoint module stays cheap to import in tests.
+    from app.models.markets import is_supported, outcomes_for
+    from app.services.telegram.alert_dispatcher import (
+        compute_breaches,
+        format_alert_message,
+    )
+
+    if not is_supported(payload.market):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown market '{payload.market}'.",
+        )
+    valid_outcomes = outcomes_for(payload.market)
+    # Tennis uses a separate outcome key set (player1/player2) handled
+    # inside the dispatcher; allow either path through.
+    if payload.sport == "tennis":
+        valid_outcomes = ("player1", "player2")
+    if payload.outcome not in valid_outcomes:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Outcome '{payload.outcome}' not valid for "
+                f"market='{payload.market}' sport='{payload.sport}'. "
+                f"Expected one of: {list(valid_outcomes)}."
+            ),
+        )
+
+    # Construct opening + current snapshots whose ratio on ``outcome``
+    # yields exactly ``pct`` in the requested direction. Start opening at
+    # 2.00 because a coin-flip line is the most intuitive baseline for
+    # the resulting "from 2.00 to X" message.
+    opening_odds = 2.00
+    multiplier = 1.0 + (payload.pct / 100.0) if payload.direction == "up" \
+        else 1.0 - (payload.pct / 100.0)
+    current_odds = round(opening_odds * multiplier, 2)
+
+    opening_snapshot: dict = {outcome: opening_odds for outcome in valid_outcomes}
+    current_snapshot: dict = {outcome: opening_odds for outcome in valid_outcomes}
+    current_snapshot[payload.outcome] = current_odds
+
+    # Threshold one tick below the simulated pct so the breach computation
+    # always fires (avoids edge-case rounding around an exact-match threshold).
+    threshold_pct = max(1.0, payload.pct - 0.5)
+    breaches = compute_breaches(
+        opening=opening_snapshot,
+        current=current_snapshot,
+        sport=payload.sport,
+        threshold_pct=threshold_pct,
+        market=payload.market,
+    )
+    if not breaches:
+        # Should never happen given how we constructed the snapshots —
+        # but if it does, surfacing a 500 rather than silently sending
+        # nothing makes the bug obvious.
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error: synthetic snapshot produced no breaches.",
+        )
+
+    msg = format_alert_message(
+        home_team=payload.home_team,
+        away_team=payload.away_team,
+        sport=payload.sport,
+        breaches=breaches,
+        bookmaker="(simulated)",
+        threshold_pct=threshold_pct,
+        market=payload.market,
+    )
+
+    # Prepend a banner so the recipient cannot confuse this with a
+    # genuine production alert — important when an admin is testing
+    # against a chat they also use for real notifications.
+    banner = (
+        "🧪 <b>SIMULATED ALERT</b> — triggered by /telegram/simulate.\n"
+        "Not a real odds movement.\n\n"
+    )
+    full_msg = banner + msg
+
+    delivered = await bot_client.send_message(user.telegram_chat_id, full_msg)
+    if not delivered:
+        # Same advice as /test — most common cause is bot blocked.
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Telegram refused the message. Make sure you haven't blocked "
+                "@%s, then try again." % (settings.TELEGRAM_BOT_USERNAME or "the bot",)
+            ),
+        )
+
+    return SimulateAlertResponse(
+        delivered=True,
+        chat_id_suffix=user.telegram_chat_id[-4:],
+        market=payload.market,
+        outcome=payload.outcome,
+        direction=payload.direction,
+        opening_odds=opening_odds,
+        current_odds=current_odds,
+        pct=payload.pct,
+        message=full_msg,
+    )
 
 
 @router.patch("/preferences", response_model=StatusResponse)
