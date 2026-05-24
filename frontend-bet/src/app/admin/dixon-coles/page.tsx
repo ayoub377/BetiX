@@ -16,6 +16,7 @@ import {
 
 import { useAuth } from "@/contexts/AuthContext";
 import { apiClient, isApiError } from "@/lib/apiClient";
+import LeagueCsvManager from "@/components/admin/LeagueCsvManager";
 
 interface LeagueOverview {
   league: string;
@@ -306,6 +307,16 @@ export default function AdminDixonColesPage() {
           <p className="text-sm">{toast.text}</p>
         </div>
       )}
+
+      {/* Per-league CSV manager — sits between the upload form and the
+          overview table so the typical "see what's there → delete the
+          stale file → re-upload the fresh one" flow happens in a
+          single vertical column. Renders nothing when the picker is on
+          the "new league" sentinel. */}
+      <LeagueCsvManager
+        league={effectiveLeague}
+        onChange={refreshLeagues}
+      />
 
       {/* League table */}
       <section className="mt-10">
