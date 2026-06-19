@@ -150,11 +150,17 @@ class Clubs:
         CLUB_NAME = "//header//h1//text()"
         CLUB_URL = "//li[@id='overview']//@href"
         PAGE_NATIONALITIES = "//td[img[@class='flaggenrahmen']]"
-        PAGE_INFOS = "//td[@class='posrela']"
-        NAMES = "//td[@class='posrela']//a//text()"
+        # The name/position cell wraps an <table class="inline-table">. On club
+        # squad pages that cell is <td class="posrela">, but on NATIONAL-TEAM
+        # squad pages it's <td class=""> (empty class) — so anchoring on
+        # 'posrela' returned nothing for national teams, collapsing names &
+        # positions to empty lists. Anchor on the inline-table instead: the
+        # inner structure is identical for both, so clubs are unaffected.
+        PAGE_INFOS = "//td[table[@class='inline-table']]"
+        NAMES = "//td[table[@class='inline-table']]//td[@class='hauptlink']//a//text()"
         JERSES = "//table/tbody/tr/td/div[@class='rn_nummer']//text()"
         URLS = "//td[@class='hauptlink']//@href"
-        POSITIONS = "//td[@class='posrela']//tr[2]//text()"
+        POSITIONS = "//td[table[@class='inline-table']]//tr[2]//td//text()"
         DOB_AGE = "//div[@id='yw1']//td[3]//text()"
         NATIONALITIES = ".//img//@title"
         JOINED = ".//span/node()/@title"
