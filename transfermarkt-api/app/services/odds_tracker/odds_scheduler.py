@@ -11,9 +11,12 @@ from app.models.markets import DEFAULT_MARKETS, MARKET_1X2, MARKET_LINE, is_supp
 from app.services.odds_tracker.odds_tracker import (
     store_odds_snapshot, get_match_meta,
     unregister_match, update_match_meta_field, TRACKED_INDEX_KEY,
+    increment_scrape_cycle,
     _update_match_start_time_in_db,
 )
-from app.core.config import SCRAPE_INTERVAL_SECONDS, STOP_BEFORE_KICKOFF_SECONDS
+from app.core.config import (
+    SCRAPE_INTERVAL_SECONDS, STOP_BEFORE_KICKOFF_SECONDS, SHARP_ODDS_EVERY_N_CYCLES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +167,17 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
         loop = asyncio.get_event_loop()
         api_key = os.environ.get("ODDS_API_KEY")
 
+        # Sharp overlay throttle. The sharp (Pinnacle/Betfair) odds are
+        # supplementary to the FlashScore primary line, so we only refresh
+        # them every Nth cycle to conserve Odds API credits (cost is
+        # markets × regions per call — see SPECS.md §6). The first cycle
+        # always fetches so the chart opens with a sharp baseline.
+        cycle_count = await increment_scrape_cycle(redis_client, match_id)
+        fetch_sharp_this_cycle = (
+            SHARP_ODDS_EVERY_N_CYCLES <= 1
+            or cycle_count % SHARP_ODDS_EVERY_N_CYCLES == 1
+        )
+
         for market in markets_to_scrape:
             try:
                 if sport == "tennis" or market == MARKET_1X2:
@@ -230,8 +244,17 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
                 # wire totals/btts to the Odds API we can extend this — for
                 # now keep them at None on non-1X2 snapshots so the chart
                 # doesn't draw a meaningless sharp series.
+                #
+                # Throttled to every Nth cycle (fetch_sharp_this_cycle) to
+                # conserve Odds API credits. On skipped cycles the snapshot
+                # simply carries no sharp series — the chart interpolates
+                # across the gap, same as it already does when the API is
+                # unavailable.
                 sharp_odds = {}
-                if api_key and meta and market == MARKET_1X2:
+                if (
+                    api_key and meta and market == MARKET_1X2
+                    and fetch_sharp_this_cycle
+                ):
                     event_id = meta.get("odds_api_event_id")
                     sport_key = meta.get("odds_api_sport_key")
                     if event_id and sport_key:

@@ -16,6 +16,21 @@ redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=Tr
 SCRAPE_INTERVAL_SECONDS = 1200  # legacy fallback; per-tier intervals live in app/core/quotas.py
 STOP_BEFORE_KICKOFF_SECONDS = 300  # stop tracking 5 minutes before match start
 
+# The Odds API sharp-overlay cadence.
+#
+# The sharp (Pinnacle/Betfair) overlay is *supplementary* to the
+# FlashScore-scraped primary line, so it does not need refreshing on every
+# tick. Fetching it once every N scrape cycles cuts the overlay's Odds API
+# spend ~N×. The primary line (FlashScore) and any explicitly-tracked market
+# (e.g. Over/Under) are unaffected and still refresh every cycle.
+#
+#   N = 1  → every cycle (legacy behaviour, most expensive)
+#   N = 3  → at a 20-min cadence, ~one sharp refresh per hour (default)
+#
+# Cost matters: The Odds API bills (markets × regions) per odds call, so each
+# avoided sharp call saves `len(ODDS_API_REGIONS)` credits. See SPECS.md §6.
+SHARP_ODDS_EVERY_N_CYCLES = max(1, int(os.environ.get("SHARP_ODDS_EVERY_N_CYCLES", "3")))
+
 # Rate limiting configuration from settings
 # To modify these values, either:
 # 1. Set environment variables: DEFAULT_MAX_REQUESTS=20 DEFAULT_RESET_DURATION=86400

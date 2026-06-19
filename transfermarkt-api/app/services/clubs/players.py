@@ -86,43 +86,42 @@ class TransfermarktClubPlayers(TransfermarktBase):
         players_marketvalues = self.get_list_by_xpath(Clubs.Players.MARKET_VALUES)
         players_statuses = ["; ".join(e.xpath(Clubs.Players.STATUSES)) for e in page_players_infos]
 
+        # National-team squad pages (and the occasional club row) don't render
+        # a shirt number, so JERSES — and, less often, other optional columns —
+        # come back SHORTER than the per-player columns. The previous zip()
+        # truncated the whole roster to the shortest list, which for national
+        # teams (no shirt numbers at all → empty jersey list) yielded ZERO
+        # players and an empty comparison. We anchor on the player rows
+        # (ids/names, one per squad row) and pad the rest, so a missing jersey
+        # just blanks out instead of dropping the player. Downstream lineup
+        # matching already falls back to name when the jersey is absent.
+        num_players = max(len(players_ids), len(players_names))
+
+        def _col(values: list, i: int):
+            return values[i] if i < len(values) else None
+
         return [
             {
-                "id": idx,
-                "name": name,
-                "position": position,
-                "dateOfBirth": dob,
-                "age": age,
-                "nationality": nationality,
-                "currentClub": current_club,
-                "height": height,
-                "foot": foot,
-                "joinedOn": joined_on,
-                "joined": joined,
-                "signedFrom": signed_from,
-                "contract": contract,
-                "marketValue": market_value,
-                "status": status,
-                "jersey_number":jersey_number
+                "id": _col(players_ids, i),
+                "name": _col(players_names, i),
+                "position": _col(players_positions, i),
+                "dateOfBirth": _col(players_dobs, i),
+                "age": _col(players_ages, i),
+                "nationality": _col(players_nationalities, i),
+                "currentClub": _col(players_current_club, i),
+                "height": _col(players_heights, i),
+                "foot": _col(players_foots, i),
+                "joinedOn": _col(players_joined_on, i),
+                "joined": _col(players_joined, i),
+                "signedFrom": _col(players_signed_from, i),
+                "contract": _col(players_contracts, i),
+                "marketValue": _col(players_marketvalues, i),
+                "status": _col(players_statuses, i),
+                # Blank (not None) when absent so downstream str() handling and
+                # jersey→name fallback behave predictably.
+                "jersey_number": _col(players_jerseys, i) or "",
             }
-            for idx, name, position, dob, age, nationality, current_club, height, foot, joined_on, joined, signed_from, contract, market_value, status,jersey_number in zip(  # noqa: E501
-                players_ids,
-                players_names,
-                players_positions,
-                players_dobs,
-                players_ages,
-                players_nationalities,
-                players_current_club,
-                players_heights,
-                players_foots,
-                players_joined_on,
-                players_joined,
-                players_signed_from,
-                players_contracts,
-                players_marketvalues,
-                players_statuses,
-                players_jerseys
-            )
+            for i in range(num_players)
         ]
 
     def get_club_players(self) -> dict:

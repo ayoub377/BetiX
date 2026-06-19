@@ -84,6 +84,17 @@ def _counted_get(url: str, params: dict, timeout: int = 15) -> httpx.Response:
 # Sharp bookmakers whose odds we want to capture alongside FlashScore
 SHARP_BOOKMAKERS = ["pinnacle", "betfair_ex_eu", "betonlineag"]
 
+# Regions requested from The Odds API on every odds call.
+#
+# COST: The Odds API bills (number of markets) × (number of regions) per call,
+# so each region is a full multiplier on every request. We default to "eu"
+# only — our sharp books (Pinnacle, Betfair EU) and the soft books we display
+# (Betclic, Bet365) are all EU-listed, so adding "us" doubled the spend for
+# near-zero extra coverage. Override with ODDS_API_REGIONS (comma-separated,
+# e.g. "eu,uk") only if you genuinely need another region's books.
+# See SPECS.md §6 for the full cost model.
+ODDS_API_REGIONS = os.environ.get("ODDS_API_REGIONS", "eu").strip() or "eu"
+
 # Regex for valid Odds API sport keys: e.g. "soccer_epl", "tennis_atp"
 _SPORT_KEY_RE = re.compile(r'^[a-z][a-z0-9]+(_[a-z][a-z0-9]+)+$')
 
@@ -490,7 +501,7 @@ def fetch_sharp_odds(
         url = f"{BASE_URL}/sports/{sport_key}/events/{event_id}/odds"
         params = {
             "apiKey": api_key,
-            "regions": "eu,us",
+            "regions": ODDS_API_REGIONS,
             "markets": "h2h",
             "oddsFormat": "decimal",
             "bookmakers": ",".join(SHARP_BOOKMAKERS),
@@ -639,7 +650,7 @@ def fetch_totals_odds(
         url = f"{BASE_URL}/sports/{sport_key}/events/{event_id}/odds"
         params = {
             "apiKey": api_key,
-            "regions": "eu,us",
+            "regions": ODDS_API_REGIONS,
             "markets": "totals",
             "oddsFormat": "decimal",
             # Don't filter to sharp-only — for totals we want the broadest
