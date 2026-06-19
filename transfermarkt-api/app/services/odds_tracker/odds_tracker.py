@@ -28,6 +28,25 @@ def odds_history_key(match_id: str, market: str = MARKET_1X2) -> str:
 TRACKED_INDEX_KEY = "tracked_matches_index"
 
 
+def scrape_cycle_key(match_id: str) -> str:
+    return f"odds_scrape_cycle:{match_id}"
+
+
+async def increment_scrape_cycle(redis_client, match_id: str) -> int:
+    """Increment and return this match's scrape-cycle counter.
+
+    Used by the scheduler to throttle the (supplementary) sharp-odds overlay
+    to every Nth cycle so we don't spend an Odds API credit on every tick.
+    The counter survives restarts (it's in Redis), so the cadence stays
+    stable across deploys. TTL'd at 7 days so the key doesn't outlive the
+    match's tracking window by much — tracking always stops at kickoff.
+    """
+    key = scrape_cycle_key(match_id)
+    count = await redis_client.incr(key)
+    await redis_client.expire(key, 7 * 86400)
+    return count
+
+
 def _persist_snapshot_to_db(match_id: str, snapshot: dict):
     """Write a snapshot to PostgreSQL. Runs in a thread — must be sync."""
     try:
