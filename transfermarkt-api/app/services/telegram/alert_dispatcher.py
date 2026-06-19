@@ -255,6 +255,7 @@ async def maybe_dispatch_alert(
         user_id = match_meta.get("user_id")
         if not user_id:
             # Legacy tracked match with no owner — nothing to do.
+            logger.debug("maybe_dispatch_alert: match=%s has no user_id in meta — skipping.", match_id)
             return
 
         # Lookup the user's Telegram prefs from Postgres. Cheap (single PK
@@ -262,11 +263,22 @@ async def maybe_dispatch_alert(
         # at any time and we want that to take effect immediately.
         prefs = _load_user_prefs(user_id)
         if not prefs or not prefs.enabled:
+            # _load_user_prefs already logged the specific reason at INFO level.
             return
 
         opening = await _get_opening_snapshot(redis_client, match_id, market=market)
-        if opening is None or opening.get("timestamp") == new_snapshot.get("timestamp"):
+        if opening is None:
+            logger.debug(
+                "maybe_dispatch_alert: user=%s match=%s market=%s — no opening snapshot yet.",
+                user_id, match_id, market,
+            )
+            return
+        if opening.get("timestamp") == new_snapshot.get("timestamp"):
             # First-ever snapshot for this market — no movement to detect yet.
+            logger.debug(
+                "maybe_dispatch_alert: user=%s match=%s market=%s — first snapshot, no movement yet.",
+                user_id, match_id, market,
+            )
             return
 
         breaches = compute_breaches(
@@ -275,6 +287,12 @@ async def maybe_dispatch_alert(
             sport=sport,
             threshold_pct=prefs.threshold_pct,
             market=market,
+        )
+        logger.info(
+            "maybe_dispatch_alert: user=%s match=%s market=%s threshold=%.1f%% — "
+            "%d breach(es): %s",
+            user_id, match_id, market, prefs.threshold_pct,
+            len(breaches), [(b.dedupe_key, b.abs_pct_move) for b in breaches],
         )
         if not breaches:
             return
@@ -288,6 +306,10 @@ async def maybe_dispatch_alert(
             ):
                 fresh.append(b)
         if not fresh:
+            logger.info(
+                "maybe_dispatch_alert: user=%s match=%s market=%s — all breaches already alerted (dedupe), skipping.",
+                user_id, match_id, market,
+            )
             return
 
         msg = format_alert_message(
@@ -342,17 +364,40 @@ def _load_user_prefs(user_id: str) -> Optional[_UserAlertPrefs]:
         session = SessionLocal()
         try:
             user = session.query(User).filter(User.id == user_id).one_or_none()
-            if (
-                user is None
-                or not user.telegram_chat_id
-                or not user.telegram_alerts_enabled
-                or user.telegram_alert_threshold_pct is None
-            ):
+            if user is None:
+                logger.warning("Telegram prefs: no user row for user_id=%s", user_id)
                 return None
-            # Only premium / admin actually get the alert. We could check
-            # subscription_status too once billing is fully wired.
+            if not user.telegram_chat_id:
+                logger.info(
+                    "Telegram prefs: user=%s has no telegram_chat_id — "
+                    "complete the /link flow first.",
+                    user_id,
+                )
+                return None
+            if not user.telegram_alerts_enabled:
+                logger.info(
+                    "Telegram prefs: user=%s alerts disabled — "
+                    "PATCH /telegram/preferences {\"enabled\": true} to activate.",
+                    user_id,
+                )
+                return None
+            if user.telegram_alert_threshold_pct is None:
+                logger.info(
+                    "Telegram prefs: user=%s has no threshold configured — "
+                    "PATCH /telegram/preferences {\"threshold_pct\": N} to set it.",
+                    user_id,
+                )
+                return None
             if user.role not in ("premium", "admin"):
+                logger.info(
+                    "Telegram prefs: user=%s role=%s is not premium/admin — skipping.",
+                    user_id, user.role,
+                )
                 return None
+            logger.info(
+                "Telegram prefs: user=%s chat_id=...%s threshold=%.1f%%",
+                user_id, user.telegram_chat_id[-4:], user.telegram_alert_threshold_pct,
+            )
             return _UserAlertPrefs(
                 chat_id=user.telegram_chat_id,
                 threshold_pct=float(user.telegram_alert_threshold_pct),
