@@ -121,7 +121,10 @@ class TransfermarktClubPlayers(TransfermarktBase):
                 # jersey→name fallback behave predictably.
                 "jersey_number": _col(players_jerseys, i) or "",
             }
+            # Skip padded rows that have no name — those are an artefact of a
+            # column being longer than the id/name columns, not real players.
             for i in range(num_players)
+            if _col(players_names, i)
         ]
 
     def get_club_players(self) -> dict:

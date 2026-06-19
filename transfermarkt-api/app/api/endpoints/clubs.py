@@ -604,6 +604,21 @@ async def compare_players_with_lineup_and_substitutions(club_home_name: str, clu
     home_team_players = home_team_players_data.get("players", [])
     away_team_players = away_team_players_data.get("players", [])
 
+    # Guarantee a 'position' key on every player. The squad scraper runs its
+    # output through clean_response(), which DROPS any key whose value is
+    # falsy — so a player with a blank/missing position comes back with no
+    # 'position' key at all. That's common for national-team squads. Several
+    # call sites below index player["position"] directly, so a missing key
+    # raised "Internal server error: 'position'". Normalise once here.
+    def _normalize_players(players: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        for p in players:
+            if not p.get("position"):
+                p["position"] = "Unknown Position"
+        return players
+
+    home_team_players = _normalize_players(home_team_players)
+    away_team_players = _normalize_players(away_team_players)
+
     # if tracker:
     #     await tracker.update(55, "Processing and organizing player data...")
 
