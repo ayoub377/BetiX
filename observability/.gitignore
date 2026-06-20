@@ -1,0 +1,4 @@
+# Secrets — never commit
+gcp-sa-key.json
+*-sa-key.json
+.env

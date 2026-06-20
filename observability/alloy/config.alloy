@@ -1,0 +1,116 @@
+// Grafana Alloy — single log shipper for the whole platform.
+//
+//   Cloud Run (fastapi-app, frontend-app)  ──┐
+//      via  Cloud Logging sink → Pub/Sub      │
+//                                             ├─►  Grafana Cloud Loki
+//   GCE VM containers (redis, postgres,       │
+//      scraper-service)  via Docker socket  ──┘
+//
+// Runs as one container on the GCE VM (see docker-compose.gce.yml).
+// All secrets/IDs come from env vars — see observability/README.md.
+//
+// Validate locally with:  alloy fmt config.alloy
+
+// ──────────────────────────────────────────────────────────────────
+// Destination: Grafana Cloud Loki
+// ──────────────────────────────────────────────────────────────────
+loki.write "grafana_cloud" {
+	endpoint {
+		url = sys.env("GRAFANA_LOKI_URL") // https://logs-prod-XXX.grafana.net/loki/api/v1/push
+		basic_auth {
+			username = sys.env("GRAFANA_LOKI_USER")  // Loki "User" / instance ID (a number)
+			password = sys.env("GRAFANA_LOKI_TOKEN") // Grafana Cloud API token (scope: logs:write)
+		}
+	}
+	external_labels = {
+		env = "prod",
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Source 1 — Cloud Run logs via a GCP Pub/Sub subscription.
+// The Cloud Logging sink (created in README step 2) publishes each
+// LogEntry as JSON to the topic; we pull it from the subscription.
+// ──────────────────────────────────────────────────────────────────
+loki.source.gcplog "cloud_run" {
+	pull {
+		project_id             = sys.env("GCP_PROJECT_ID")
+		subscription           = sys.env("GCP_LOG_SUBSCRIPTION") // e.g. grafana-logs-sub
+		use_incoming_timestamp = true
+		labels = {
+			source = "cloud_run",
+		}
+	}
+	forward_to = [loki.process.cloud_run.receiver]
+}
+
+// Lift useful fields out of the GCP LogEntry into Loki labels. Our backend
+// emits structured JSON (see app/core/logging_config.py) so component/logger
+// are present; the frontend logs plain text, which still carries service +
+// severity from the LogEntry envelope.
+loki.process "cloud_run" {
+	// Envelope fields set by Cloud Logging on every entry.
+	stage.json {
+		expressions = {
+			service     = "resource.labels.service_name",
+			severity    = "severity",
+			json_payload = "jsonPayload",
+		}
+	}
+
+	// Backend structured fields (present only when jsonPayload exists).
+	stage.json {
+		source = "json_payload"
+		expressions = {
+			component      = "component",
+			logger         = "logger",
+			oddsapi_status = "oddsapi_status",
+		}
+	}
+
+	// Default component for entries without one (e.g. frontend text logs).
+	stage.template {
+		source   = "component"
+		template = "{{ if .Value }}{{ .Value }}{{ else }}app{{ end }}"
+	}
+
+	// Promote a small, low-cardinality set to labels. (status/logger stay as
+	// structured fields you can still filter with `| json`.)
+	stage.labels {
+		values = {
+			service   = "service",
+			level     = "severity",
+			component = "component",
+		}
+	}
+
+	forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Source 2 — local Docker containers on the GCE VM
+// (redis, postgres, scraper-service, and Alloy itself).
+// ──────────────────────────────────────────────────────────────────
+discovery.docker "vm" {
+	host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "vm" {
+	targets = discovery.docker.vm.targets
+
+	// Container name (strip the leading slash) → `container` label.
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+}
+
+loki.source.docker "vm" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.vm.output
+	labels     = {
+		source = "gce_vm",
+	}
+	forward_to = [loki.write.grafana_cloud.receiver]
+}

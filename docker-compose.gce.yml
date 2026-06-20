@@ -68,6 +68,32 @@ services:
         reservations:
           memory: 512m
 
+  # Grafana Alloy — ships Cloud Run logs (via Pub/Sub) + these local
+  # container logs to Grafana Cloud Loki. See observability/README.md.
+  alloy:
+    image: grafana/alloy:latest
+    container_name: alloy
+    restart: unless-stopped
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ./observability/gcp-sa-key.json:/etc/alloy/gcp-sa-key.json:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    environment:
+      # Grafana Cloud Loki push credentials
+      - GRAFANA_LOKI_URL=${GRAFANA_LOKI_URL}
+      - GRAFANA_LOKI_USER=${GRAFANA_LOKI_USER}
+      - GRAFANA_LOKI_TOKEN=${GRAFANA_LOKI_TOKEN}
+      # GCP Pub/Sub source (Cloud Run logs)
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - GCP_LOG_SUBSCRIPTION=${GCP_LOG_SUBSCRIPTION}
+      - GOOGLE_APPLICATION_CREDENTIALS=/etc/alloy/gcp-sa-key.json
+
 volumes:
   redis-data:
   postgres-data:
+  alloy-data:
