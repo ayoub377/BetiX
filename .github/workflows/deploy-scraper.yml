@@ -6,6 +6,7 @@ on:
     paths:
       - "scraper-service/**"
       - "docker-compose.gce.yml"
+      - "observability/**"
       - ".github/workflows/deploy-scraper.yml"
 
 concurrency:
@@ -45,6 +46,7 @@ jobs:
         run: |
           gcloud compute scp --recurse \
             scraper-service \
+            observability \
             docker-compose.gce.yml \
             ${{ secrets.GCE_VM_NAME }}:~ \
             --zone=${{ secrets.GCE_VM_ZONE }} \

@@ -38,7 +38,36 @@ Alloy agent on the VM is the only moving part we run.
 
 ---
 
-## One-time setup
+## Easiest path: one script in Cloud Shell
+
+GCP **Cloud Shell** is already authenticated, so it's the simplest place to run
+everything (no local SSH/`gcloud` install). After you have your 3 Grafana Cloud
+Loki values (step 1 below):
+
+```bash
+# In Cloud Shell, from the repo root (clone it or open in Cloud Shell Editor):
+export GRAFANA_LOKI_URL="https://logs-prod-XXX.grafana.net/loki/api/v1/push"
+export GRAFANA_LOKI_USER="123456"
+export GRAFANA_LOKI_TOKEN="glc_xxx"
+export GCE_VM_NAME="your-vm-name"
+export GCE_VM_ZONE="europe-west9-a"
+bash observability/setup-gcp.sh
+```
+
+That script runs steps 2–6 below (Pub/Sub, sink, service account, `JSON_LOGS`,
+and pushes the key + `.env` to the VM and starts Alloy). It's idempotent —
+safe to re-run. Prereq: PR #40 is merged and the scraper deploy has run, so
+`~/observability` and `~/docker-compose.gce.yml` exist on the VM.
+
+> There is **no pre-existing env file to find** — `.env` is something the
+> script (or you) *creates* on the VM next to `docker-compose.gce.yml`.
+
+The manual steps below are the same thing, broken out, if you'd rather not use
+the script.
+
+---
+
+## Manual setup
 
 Set your project once:
 
