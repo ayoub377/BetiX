@@ -26,15 +26,13 @@ from app.models.database import init_db
 from app.models.sport import SportType
 from app.services.flashscore_scraper.scraper_factory import get_scraper
 from app.settings import settings
+from app.core.logging_config import configure_logging
 from dotenv import load_dotenv
 
+# Structured (JSON) logs when JSON_LOGS=true (Cloud Run); pretty single-line
+# locally. See app/core/logging_config.py for the component-label mapping.
+configure_logging()
 logger = logging.getLogger(__name__)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt="%H:%M:%S",
-)
 
 io_executor = ThreadPoolExecutor(max_workers=50)
 

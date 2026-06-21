@@ -79,7 +79,26 @@ def _counted_get(url: str, params: dict, timeout: int = 15) -> httpx.Response:
     API counts failed requests against the quota too.
     """
     _record_api_call()
-    return httpx.get(url, params=params, timeout=timeout)
+    resp = httpx.get(url, params=params, timeout=timeout)
+    # One structured line per Odds API call so Grafana/Loki can answer
+    # "how many calls today?" and "show me the 401s" without scraping Redis.
+    # The endpoint path carries no secrets — apiKey lives in `params`, which
+    # we deliberately do not log.
+    try:
+        endpoint = url.replace(BASE_URL, "") or url
+        logger.info(
+            "odds_api call %s -> %s",
+            endpoint, resp.status_code,
+            extra={
+                "event": "odds_api_call",
+                "oddsapi_endpoint": endpoint,
+                "oddsapi_status": resp.status_code,
+            },
+        )
+    except Exception:
+        # Logging must never break the call path.
+        pass
+    return resp
 
 # Sharp bookmakers whose odds we want to capture alongside FlashScore
 SHARP_BOOKMAKERS = ["pinnacle", "betfair_ex_eu", "betonlineag"]
