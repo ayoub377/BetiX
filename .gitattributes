@@ -1,0 +1,4 @@
+# Files that must keep LF line endings to run on Linux (GCE VM / containers),
+# regardless of the OS they're checked out on.
+*.sh    text eol=lf
+*.alloy text eol=lf
