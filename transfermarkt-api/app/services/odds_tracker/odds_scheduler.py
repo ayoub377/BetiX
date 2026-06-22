@@ -177,6 +177,22 @@ def make_scrape_job(match_id: str, scraper, redis_client, sport: str = "football
             SHARP_ODDS_EVERY_N_CYCLES <= 1
             or cycle_count % SHARP_ODDS_EVERY_N_CYCLES == 1
         )
+        # Make the throttle decision visible in logs — otherwise a deliberately
+        # skipped sharp fetch looks like a silent failure. Query in Loki with
+        # event="sharp_overlay_decision".
+        logger.info(
+            "Scrape cycle %d for %s: sharp overlay %s (every %d cycle(s))",
+            cycle_count, match_id,
+            "FETCH" if fetch_sharp_this_cycle else "SKIP",
+            SHARP_ODDS_EVERY_N_CYCLES,
+            extra={
+                "event": "sharp_overlay_decision",
+                "match_id": match_id,
+                "cycle": cycle_count,
+                "fetch_sharp": fetch_sharp_this_cycle,
+                "every_n_cycles": SHARP_ODDS_EVERY_N_CYCLES,
+            },
+        )
 
         for market in markets_to_scrape:
             try:
