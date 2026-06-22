@@ -88,13 +88,25 @@ loki.source.gcplog "cloud_run" {
   forward_to = [loki.process.cloud_run.receiver]
 }
 loki.process "cloud_run" {
-  stage.json { expressions = { service = "resource.labels.service_name", severity = "severity", json_payload = "jsonPayload" } }
-  stage.json { source = "json_payload" expressions = { component = "component" } }
-  stage.template { source = "component" template = "{{ if .Value }}{{ .Value }}{{ else }}app{{ end }}" }
-  stage.labels { values = { service = "service", level = "severity", component = "component" } }
+  stage.json {
+    expressions = { service = "resource.labels.service_name", severity = "severity", json_payload = "jsonPayload" }
+  }
+  stage.json {
+    source = "json_payload"
+    expressions = { component = "component" }
+  }
+  stage.template {
+    source = "component"
+    template = "{{ if .Value }}{{ .Value }}{{ else }}app{{ end }}"
+  }
+  stage.labels {
+    values = { service = "service", level = "severity", component = "component" }
+  }
   forward_to = [loki.write.grafana_cloud.receiver]
 }
-discovery.docker "vm" { host = "unix:///var/run/docker.sock" }
+discovery.docker "vm" {
+  host = "unix:///var/run/docker.sock"
+}
 loki.source.docker "vm" {
   host       = "unix:///var/run/docker.sock"
   targets    = discovery.docker.vm.targets
