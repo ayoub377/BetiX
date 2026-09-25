@@ -22,6 +22,7 @@ scraper_outputs/
 trained_models/
 *.png
 !frontend-bet/public/**/*.png
+!docs/screenshots/*.png
 transfermarkt-api/service-account.json
 # IDE
 .idea/
